@@ -28,7 +28,7 @@ class ANN(nn.Module):
         n_out,
         nNodes,
         nLayers,
-        activation="silu",
+        activation="relu",
         out_activation=None,
         scale=1,
     ):
@@ -548,48 +548,48 @@ class ST_alpha_Agent:
     #     plot(a, r"")
 
 
-    # def plot_policy(self, name=""):
+    def plot_policy(self, name=""):
 
-    #         NI = 51
-    #         I = torch.linspace(-self.Nq, self.Nq, NI)
-    #         NA = 51
-    #         A = torch.linspace(0, 1, NA)
+        NI = 51
+        I = torch.linspace(-self.Nq, self.Nq, NI)
+        NA = 51
+        A = torch.linspace(0, 1, NA)
 
-    #         Im, Am = torch.meshgrid(I, A, indexing="ij")
+        Im, Am = torch.meshgrid(I, A, indexing="ij")
 
-    #         def plot(a, title):
+        def plot(a, title):
 
-    #             fig, ax = plt.subplots()
-    #             plt.title("Inventory vs Alpha Heatmap for Action")
+            fig, ax = plt.subplots()
+            plt.title("Inventory vs Alpha Heatmap for Action")
 
-    #             cs = plt.contourf(
-    #                 Im.numpy(),
-    #                 Am.numpy(),
-    #                 a,
-    #                 levels=np.linspace(0, 1, 21),
-    #                 cmap="RdBu",
-    #             )
-    #             plt.axhline(0.5, linestyle="--", color="k")
-    #             plt.axvline(0, linestyle="--", color="k")
-    #             ax.set_xlabel("Inventory")
-    #             ax.set_ylabel("Alpha")
-    #             ax.set_title(title)
+            cs = plt.contourf(
+                Im.numpy(),
+                Am.numpy(),
+                a,
+                levels=np.linspace(0, 1, 21),
+                cmap="RdBu",
+            )
+            plt.axhline(0.5, linestyle="--", color="k")
+            plt.axvline(0, linestyle="--", color="k")
+            ax.set_xlabel("Inventory")
+            ax.set_ylabel("Alpha")
+            ax.set_title(title)
 
-    #             cbar = fig.colorbar(cs, ax=ax, shrink=0.9)
-    #             cbar.set_ticks(np.linspace(0, 1, 11))
-    #             cbar.ax.set_ylabel("Action")
+            cbar = fig.colorbar(cs, ax=ax, shrink=0.9)
+            cbar.set_ticks(np.linspace(0, 1, 11))
+            cbar.ax.set_ylabel("Action")
 
-    #             plt.tight_layout()
-    #             plt.show()
+            plt.tight_layout()
+            plt.show()
 
-    #         X = self.__stack_state__(
-    #             t_Ndt=torch.zeros_like(Im.flatten()),
-    #             S=torch.zeros_like(Im.flatten()),
-    #             X=torch.zeros_like(Im.flatten()),
-    #             alpha=Am.flatten(),
-    #             q=Im.flatten(),
-    #         )
+        X = self.__stack_state__(
+            t_Ndt=torch.zeros_like(Im.flatten()),
+            S=torch.zeros_like(Im.flatten()),
+            X=torch.zeros_like(Im.flatten()),
+            alpha=Am.flatten(),
+            q=Im.flatten(),
+        )
 
-    #         a = self.pi_main["net"](X).detach().squeeze()
+        a = self.pi_main["net"](X).detach().squeeze()
 
-    #         plot(a.reshape(Im.shape), r"")
+        plot(a.reshape(Im.shape), r"")

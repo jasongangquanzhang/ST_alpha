@@ -23,7 +23,7 @@ class ST_alpha_env:
     def __init__(
         self,
         ShortTermalpha: ShortTermalpha,
-        nu = 0,
+        nu=0,
         T=60,
         POV=0.2,
         Nq=20,
@@ -52,7 +52,8 @@ class ST_alpha_env:
         # order entry parameters
         self.lambda_p = 0.5 * Nq / POV / T
         self.lambda_m = 0.5 * Nq / POV / T
-        self.Ndt = math.floor((self.lambda_p + self.lambda_m) * T * 5)
+        # self.Ndt = math.floor((self.lambda_p + self.lambda_m) * T * 5)
+        self.Ndt = 200
         self.T = T  # total time
         self.dt = T / self.Ndt
 
@@ -82,11 +83,24 @@ class ST_alpha_env:
         action[:, 0] = 0
         action[:, 1] = 0
 
-        for t in tqdm(range(self.Ndt-1)):
+        for t in tqdm(range(self.Ndt - 1)):
             # not finished
-            t_Ndt = t * self.dt/self.T
-            S[:, t + 1], X[:, t + 1], alpha[:, t + 1], q[:, t + 1], r[:, t], isMO, buySellMO = self.step(
-                t_Ndt=t_Ndt, S=S[:, t], X=X[:, t], alpha=alpha[:, t], q=q[:, t], action=action
+            t_Ndt = t * self.dt / self.T
+            (
+                S[:, t + 1],
+                X[:, t + 1],
+                alpha[:, t + 1],
+                q[:, t + 1],
+                r[:, t],
+                isMO,
+                buySellMO,
+            ) = self.step(
+                t_Ndt=t_Ndt,
+                S=S[:, t],
+                X=X[:, t],
+                alpha=alpha[:, t],
+                q=q[:, t],
+                action=action,
             )
 
         return S, X, alpha, q, r
@@ -128,6 +142,7 @@ class ST_alpha_env:
             (1 - torch.exp(torch.tensor(-self.dt * (self.lambda_p + self.lambda_m)))),
             decimals=4,
         )
+
         buySellMO = (
             2 * (torch.rand(Nsims) < self.lambda_p / (self.lambda_p + self.lambda_m))
             - 1
@@ -147,9 +162,9 @@ class ST_alpha_env:
         # update cash
         X_p = (
             X
-            - torch.multiply(S - 0.5 * self.Delta, isfilled_m)
-            + torch.multiply(S + 0.5 * self.Delta, isfilled_p)
+            - torch.mul(S - 0.5 * self.Delta, isfilled_m)
+            + torch.mul(S + 0.5 * self.Delta, isfilled_p)
         )
         # calculate reward
-        reward = X_p + q_p * S_p - X - q * S
+        reward = (X_p - X) + (q_p - q) * S_p
         return S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO
