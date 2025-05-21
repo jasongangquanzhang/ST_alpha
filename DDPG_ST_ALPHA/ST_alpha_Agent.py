@@ -46,8 +46,7 @@ class ANN(nn.Module):
             self.g = nn.SiLU()
         elif activation == "relu":
             self.g = nn.ReLU()
-        elif activation == "sigmoid":
-            self.g = torch.sigmoid()
+
 
         self.out_activation = out_activation
         self.scale = scale
