@@ -117,7 +117,7 @@ class ST_alpha_Agent:
         #
         self.pi_main = {
             "net": ANN(
-                n_in=5,
+                n_in=2,
                 n_out=2,
                 nNodes=self.n_nodes,
                 nLayers=self.n_layers,
@@ -137,7 +137,7 @@ class ST_alpha_Agent:
         # features = t/T, S, X, alpha, q, action
         #
         self.Q_main = {
-            "net": ANN(n_in=7, n_out=1, nNodes=self.n_nodes, nLayers=self.n_layers)
+            "net": ANN(n_in=4, n_out=1, nNodes=self.n_nodes, nLayers=self.n_layers)
         }
 
         self.Q_main["optimizer"], self.Q_main["scheduler"] = self.__get_optim_sched__(
@@ -174,8 +174,8 @@ class ST_alpha_Agent:
             (
                 t_Ndt.unsqueeze(-1),
                 S.unsqueeze(-1) / self.env.S_0 - 1.0,
-                X.unsqueeze(-1),
                 alpha.unsqueeze(-1),
+                X.unsqueeze(-1),
                 q.unsqueeze(-1) / self.Nq,
             ),
             axis=-1,
@@ -210,15 +210,15 @@ class ST_alpha_Agent:
 
             # compute the action
             action = torch.clamp(
-                self.pi_main["net"](state).detach()
+                self.pi_main["net"](state[:, [2, 4]]).detach()
                 + torch.normal(
-                    0, epsilon, size=self.pi_main["net"](state).shape
+                    0, epsilon, size=self.pi_main["net"](state[:, [2, 4]]).shape
                 ),
                 0.0,
                 1.0,
             )
             # compute the value of the action I_p given state X
-            Q = self.Q_main["net"](torch.cat((state, action), axis=1))
+            Q = self.Q_main["net"](torch.cat((state[:, [2, 4]], action), axis=1))
 
             # step in the environment get the next state and reward
             S_p, X_p, alpha_p, q_p, r, isMO, buySellMO = self.env.step(
@@ -232,12 +232,12 @@ class ST_alpha_Agent:
             )
 
             # optimal policy at t+1 get the next action action_p
-            action_p = self.pi_main["net"](state_p).detach()
+            action_p = self.pi_main["net"](state_p[:, [2, 4]]).detach()
 
             # compute the target for Q
             # NOTE: the target is not clipped and Q_target is used
             target = r.reshape(-1, 1) + self.gamma * self.Q_target["net"](
-                torch.cat((state_p, action_p), axis=1)
+                torch.cat((state_p[:, [2, 4]], action_p), axis=1)
             )
 
             loss = torch.mean((target.detach() - Q) ** 2)
@@ -264,14 +264,13 @@ class ST_alpha_Agent:
             # concatenate states
             state = self.__stack_state__(t_Ndt=t_Ndt, S=S, q=q, X=X, alpha=alpha)
 
-            action = self.pi_main["net"](state)
+            action = self.pi_main["net"](state[:, [2, 4]])
 
-            Q = self.Q_main["net"](torch.cat((state, action), axis=1))
+            Q = self.Q_main["net"](torch.cat((state[:, [2, 4]], action), axis=1))
 
             loss = -torch.mean(Q)
 
             loss.backward()
-
             self.pi_main["optimizer"].step()
             self.pi_main["scheduler"].step()
 
@@ -406,7 +405,7 @@ class ST_alpha_Agent:
                 t_Ndt=t_Ndt, S=S[:, t], X=X[:, t], alpha=alpha[:, t], q=q[:, t]
             )
             # compute the action
-            action[:, t] = self.pi_main["net"](state)  # this returns a probability
+            action[:, t] = self.pi_main["net"](state[:, [2, 4]])  # this returns a probability
 
             (
                 S[:, t + 1],
@@ -556,11 +555,11 @@ class ST_alpha_Agent:
         """Plots the policy as a heatmap showing the difference between buy and sell probabilities."""
         num_alpha_points = 51
         num_inventory_points = 51
-        alpha_values = torch.linspace(-0.02, 0.02, num_alpha_points)
-        inventory_levels = torch.linspace(-self.Nq, self.Nq, num_inventory_points)
+        alpha_values = torch.linspace(-0.1, 0.1, num_alpha_points)
+        inventory_levels = torch.linspace(-40, 40, num_inventory_points)
 
-        policy_diff = np.zeros((num_inventory_points, num_alpha_points))
-
+        policy_buy = np.zeros((num_inventory_points, num_alpha_points))
+        policy_sell = np.zeros((num_inventory_points, num_alpha_points))
         with torch.no_grad():
             for i, q in enumerate(inventory_levels):
                 for j, alpha in enumerate(alpha_values):
@@ -571,23 +570,100 @@ class ST_alpha_Agent:
                         alpha=torch.tensor([alpha]),
                         q=torch.tensor([q]),
                     )
-                    policy_output = self.pi_main["net"](state).squeeze().numpy()
+                    policy_output = self.pi_main["net"](state[:, [2, 4]]).squeeze().numpy()
                     # Assuming policy_output[0] is buy probability and policy_output[1] is sell probability
-                    policy_diff[i, j] = policy_output[0] - policy_output[1]
+                    buy_prob = policy_output[0]
+                    sell_prob = policy_output[1]
+
+                    # Classify into scenarios: 00, 10, 01, 11
+                    if buy_prob < 0.5 and sell_prob < 0.5:
+                        policy_buy[i, j] = 0  # Scenario 00
+                    elif buy_prob >= 0.5 and sell_prob < 0.5:
+                        policy_buy[i, j] = 1  # Scenario 10
+                    elif buy_prob < 0.5 and sell_prob >= 0.5:
+                        policy_buy[i, j] = 2  # Scenario 01
+                    elif buy_prob >= 0.5 and sell_prob >= 0.5:
+                        policy_buy[i, j] = 3  # Scenario 11
 
         plt.figure(figsize=(8, 6))
         plt.contourf(
             alpha_values.numpy(),
             inventory_levels.numpy(),
-            policy_diff,
-            levels=21,
-            cmap="RdBu",
+            policy_buy,
+            levels=[-0.5, 0.5, 1.5, 2.5, 3.5],
+            cmap="tab10",
             alpha=0.8,
         )
-        plt.colorbar(label="Buy - Sell Probability")
+        plt.colorbar(
+            ticks=[0, 1, 2, 3],
+            label="Scenarios (00: 0, 10: 1, 01: 2, 11: 3)",
+        )
         plt.axhline(0, linestyle="--", color="k", linewidth=0.8)
         plt.axvline(0, linestyle="--", color="k", linewidth=0.8)
-        plt.title("Policy Heatmap", fontsize=16)
+        plt.title("Policy Heatmap - Scenarios", fontsize=16)
+        plt.xlabel(r"$\alpha$", fontsize=14)
+        plt.ylabel("Inventory", fontsize=14)
+        plt.tight_layout()
+        plt.show()
+
+
+    def plot_policy2(self, name=""):
+        """Plots the policy as heatmaps showing the probabilities for both buy and sell actions."""
+        num_alpha_points = 51
+        num_inventory_points = 51
+        alpha_values = torch.linspace(-0.1, 0.1, num_alpha_points)
+        inventory_levels = torch.linspace(-40, 40, num_inventory_points)
+
+        policy_buy = np.zeros((num_inventory_points, num_alpha_points))
+        policy_sell = np.zeros((num_inventory_points, num_alpha_points))
+        with torch.no_grad():
+            for i, q in enumerate(inventory_levels):
+                for j, alpha in enumerate(alpha_values):
+                    state = self.__stack_state__(
+                        t_Ndt=0.5 * torch.ones(1),
+                        S=self.env.S_0 * torch.ones(1),
+                        X=torch.zeros(1),
+                        alpha=torch.tensor([alpha]),
+                        q=torch.tensor([q]),
+                    )
+                    policy_output = self.pi_main["net"](state[:, [2, 4]]).squeeze().numpy()
+                    # Assuming policy_output[0] is buy probability and policy_output[1] is sell probability
+                    policy_buy[i, j] = policy_output[0]
+                    policy_sell[i, j] = policy_output[1]
+
+        # Plot buy probability heatmap
+        plt.figure(figsize=(8, 6))
+        plt.contourf(
+            alpha_values.numpy(),
+            inventory_levels.numpy(),
+            policy_buy,
+            levels=np.linspace(0, 1, 21),
+            cmap="Blues",
+            alpha=0.8,
+        )
+        plt.colorbar(label="Buy Probability")
+        plt.axhline(0, linestyle="--", color="k", linewidth=0.8)
+        plt.axvline(0, linestyle="--", color="k", linewidth=0.8)
+        plt.title("Buy Probability Heatmap", fontsize=16)
+        plt.xlabel(r"$\alpha$", fontsize=14)
+        plt.ylabel("Inventory", fontsize=14)
+        plt.tight_layout()
+        plt.show()
+
+        # Plot sell probability heatmap
+        plt.figure(figsize=(8, 6))
+        plt.contourf(
+            alpha_values.numpy(),
+            inventory_levels.numpy(),
+            policy_sell,
+            levels=np.linspace(0, 1, 21),
+            cmap="Reds",
+            alpha=0.8,
+        )
+        plt.colorbar(label="Sell Probability")
+        plt.axhline(0, linestyle="--", color="k", linewidth=0.8)
+        plt.axvline(0, linestyle="--", color="k", linewidth=0.8)
+        plt.title("Sell Probability Heatmap", fontsize=16)
         plt.xlabel(r"$\alpha$", fontsize=14)
         plt.ylabel("Inventory", fontsize=14)
         plt.tight_layout()
