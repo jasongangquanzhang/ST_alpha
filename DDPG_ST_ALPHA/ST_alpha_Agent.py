@@ -209,8 +209,14 @@ class ST_alpha_Agent:
             state = self.__stack_state__(t_Ndt=t_Ndt, S=S, q=q, X=X, alpha=alpha)
 
             # compute the action
-            action = self.pi_main["net"](state).detach()
-
+            action = torch.clamp(
+                self.pi_main["net"](state).detach()
+                + torch.normal(
+                    0, epsilon, size=self.pi_main["net"](state).shape
+                ),
+                0.0,
+                1.0,
+            )
             # compute the value of the action I_p given state X
             Q = self.Q_main["net"](torch.cat((state, action), axis=1))
 
@@ -315,7 +321,7 @@ class ST_alpha_Agent:
                 self.run_strategy(
                     1_000, name=datetime.now().strftime("%H_%M_%S"), N=100
                 )
-                # TODO self.plot_policy()
+                self.plot_policy()
                 # self.plot_policy(name=datetime.now().strftime("%H_%M_%S"))
 
     def moving_average(self, x, n):
@@ -464,7 +470,7 @@ class ST_alpha_Agent:
         plot(t, alpha, 1, r"$\alpha_t$")
         # plot(t[1:], q[:, 1:] - q[:, :-1], 2, r"$q_t - q_{t-1}$")
         plot(t, q, 2, r"$q_t$")
-        
+
         plot(t[:-1], np.cumsum(r, axis=1), 3, r"$r_t$")
 
         plt.subplot(2, 2, 4)
@@ -497,99 +503,124 @@ class ST_alpha_Agent:
         # print(qtl)
         return S, X, alpha, q, r, action, isMO, buySellMO
 
+
     # def plot_policy(self, name=""):
 
-    #     NS = 101
-
-    #     S = torch.linspace(
-    #         self.env.S_0 - 3 * self.env.inv_vol, self.env.S_0 + 3 * self.env.inv_vol, NS
-    #     )
     #     NI = 51
-    #     I = torch.linspace(-self.I_max, self.I_max, NI)
+    #     q = torch.linspace(-self.Nq, self.Nq, NI)
+    #     NA = 51
+    #     alpha = torch.linspace(-0.02, 0.02, NA)
 
-    #     Sm, Im = torch.meshgrid(S, I, indexing="ij")
+    #     qm, alpha_m = torch.meshgrid(q, alpha, indexing="ij")
 
     #     def plot(a, title):
 
     #         fig, ax = plt.subplots()
-    #         plt.title("Inventory vs Price Heatmap for Time T")
+    #         plt.title("Inventory vs Alpha Heatmap for Action")
 
     #         cs = plt.contourf(
-    #             Sm.numpy(),
-    #             Im.numpy(),
+    #             qm.numpy(),
+    #             alpha_m.numpy(),
     #             a,
-    #             levels=np.linspace(-self.I_max, self.I_max, 21),
+    #             levels=np.linspace(0, 1, 21),
     #             cmap="RdBu",
     #         )
-    #         plt.axvline(self.env.S_0, linestyle="--", color="g")
-    #         plt.axvline(self.env.S_0 - 2 * self.env.inv_vol, linestyle="--", color="k")
-    #         plt.axvline(self.env.S_0 + 2 * self.env.inv_vol, linestyle="--", color="k")
     #         plt.axhline(0, linestyle="--", color="k")
-    #         plt.axhline(self.I_max / 2, linestyle="--", color="k")
-    #         plt.axhline(-self.I_max / 2, linestyle="--", color="k")
-    #         ax.set_xlabel("Price")
-    #         ax.set_ylabel("Inventory")
+    #         plt.axvline(0, linestyle="--", color="k")
+    #         ax.set_xlabel("Inventory")
+    #         ax.set_ylabel("Alpha")
     #         ax.set_title(title)
 
     #         cbar = fig.colorbar(cs, ax=ax, shrink=0.9)
-    #         cbar.set_ticks(np.linspace(-self.I_max, self.I_max, 11))
-    #         cbar.ax.set_ylabel("Action")
+    #         cbar.set_ticks(np.linspace(0, 1, 11))
+    #         cbar.ax.set_ylabel("Probability")
 
     #         plt.tight_layout()
     #         plt.show()
 
-    #     # X = torch.cat( ((Sm.unsqueeze(-1)/self.env.S_0-1.0),
-    #     #                 Im.unsqueeze(-1)/self.I_max), axis=-1)
+    #     X = self.__stack_state__(
+    #         t_Ndt=0.5 * torch.ones_like(alpha_m.flatten()),
+    #         S=self.env.S_0 * torch.ones_like(alpha_m.flatten()),
+    #         X=torch.zeros_like(alpha_m.flatten()),
+    #         alpha=alpha_m.flatten(),
+    #         q=qm.flatten(),
+    #     )
 
-    #     X = self.__stack_state__(Sm, Im)
+    #     a = self.pi_main["net"](X).detach()
 
-    #     a = self.pi_main["net"](X).detach().squeeze()
-
-    #     plot(a, r"")
+    #     plot((a[:, 0] - a[:, 1]).reshape(alpha_m.shape), r"Buy sell Order Probability")
+    #     # plot(a[:, 1].reshape(alpha_m.shape), r"Sell Order Probability")
 
 
     def plot_policy(self, name=""):
+            """Plots the policy as a stacked area chart of buy, sell, and buy+sell regions."""
+            num_alpha_points = 101
+            alpha_values = torch.linspace(-0.02, 0.02, num_alpha_points)
+            inventory_levels = [-20, 0, 20]  # Example inventory levels to define regions
 
-        NI = 51
-        I = torch.linspace(-self.Nq, self.Nq, NI)
-        NA = 51
-        A = torch.linspace(0, 1, NA)
+            policy_outputs = []
+            with torch.no_grad():
+                for alpha in alpha_values:
+                    # Assuming your policy network outputs two values representing something related to buy/sell
+                    # You'll need to adapt this based on the actual output of your network
+                    state = self.__stack_state__(
+                        t_Ndt=0.5 * torch.ones(1),
+                        S=self.env.S_0 * torch.ones(1),
+                        X=torch.zeros(1),
+                        alpha=alpha.unsqueeze(0),
+                        q=torch.tensor([0.0]),  # Fix inventory for this plot
+                    )
+                    policy_output = self.pi_main["net"](state).squeeze().numpy()
+                    policy_outputs.append(policy_output)
 
-        Im, Am = torch.meshgrid(I, A, indexing="ij")
+            policy_outputs = np.array(policy_outputs)
 
-        def plot(a, title):
+            # Assuming policy_outputs[:, 0] relates to "buy" and policy_outputs[:, 1] relates to "sell"
+            # You'll need to adjust these conditions based on how your network is trained
+            buy_strength = policy_outputs[:, 0]
+            sell_strength = policy_outputs[:, 1]
 
-            fig, ax = plt.subplots()
-            plt.title("Inventory vs Alpha Heatmap for Action")
+            # Define regions based on the relative strength of buy and sell signals
+            buy_region = buy_strength > sell_strength + 0.1  # Example threshold
+            sell_region = sell_strength > buy_strength + 0.1 # Example threshold
+            buy_sell_region = np.logical_and(buy_strength <= sell_strength + 0.1, sell_strength <= buy_strength + 0.1)
 
-            cs = plt.contourf(
-                Im.numpy(),
-                Am.numpy(),
-                a,
-                levels=np.linspace(0, 1, 21),
-                cmap="RdBu",
+            # Map boolean regions to inventory levels for plotting
+            buy_inventory = np.where(buy_region, 20, -20)
+            sell_inventory = np.where(sell_region, 20, -20)
+            buy_sell_inventory = np.where(buy_sell_region, 20, -20)
+
+            plt.figure(figsize=(8, 6))
+
+            plt.stackplot(
+                alpha_values.numpy(),
+                np.where(sell_region, 20, 0),
+                np.where(buy_sell_region, 20, 0),
+                np.where(buy_region, 20, 0),
+                colors=['#ff7f7f', '#8ac98a', '#8181f7'],  # Light red, light green, light blue
+                edgecolor='k',
+                linewidth=0.5,
+                labels=['sell', 'buy + sell', 'buy'],
+                step='pre'
             )
-            plt.axhline(0.5, linestyle="--", color="k")
-            plt.axvline(0, linestyle="--", color="k")
-            ax.set_xlabel("Inventory")
-            ax.set_ylabel("Alpha")
-            ax.set_title(title)
+            plt.stackplot(
+                alpha_values.numpy(),
+                np.where(sell_region, -20, 0),
+                np.where(buy_sell_region, -20, 0),
+                np.where(buy_region, -20, 0),
+                colors=['#ff7f7f', '#8ac98a', '#8181f7'],
+                edgecolor='k',
+                linewidth=0.5,
+                step='pre'
+            )
 
-            cbar = fig.colorbar(cs, ax=ax, shrink=0.9)
-            cbar.set_ticks(np.linspace(0, 1, 11))
-            cbar.ax.set_ylabel("Action")
-
+            plt.title("Asymptotic Strategy Posts", fontsize=16)
+            plt.xlabel(r"$\alpha$", fontsize=14)
+            plt.ylabel("Inventory", fontsize=14)
+            plt.yticks(inventory_levels)
+            plt.xlim(alpha_values.min().item(), alpha_values.max().item())
+            plt.ylim(-22, 22)
+            plt.legend(loc='upper left')
+            plt.grid(False)
             plt.tight_layout()
             plt.show()
-
-        X = self.__stack_state__(
-            t_Ndt=torch.zeros_like(Im.flatten()),
-            S=torch.zeros_like(Im.flatten()),
-            X=torch.zeros_like(Im.flatten()),
-            alpha=Am.flatten(),
-            q=Im.flatten(),
-        )
-
-        a = self.pi_main["net"](X).detach().squeeze()
-
-        plot(a.reshape(Im.shape), r"")
