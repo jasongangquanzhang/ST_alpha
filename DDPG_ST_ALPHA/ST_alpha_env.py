@@ -138,10 +138,9 @@ class ST_alpha_env:
         # Action is a 2D tensor with shape (Nsims, 2)
         # action[:, 0] is buy, action[:, 1] is sell probability
         action = torch.bernoulli(action)
-        isMO = torch.rand(Nsims) < torch.round(
-            (1 - torch.exp(torch.tensor(-self.dt * (self.lambda_p + self.lambda_m)))),
-            decimals=4,
-        )
+        prob = 1 - torch.exp(torch.tensor(-self.dt * (self.lambda_p + self.lambda_m)))
+        prob = torch.round(prob * 1e4) / 1e4
+        isMO = torch.rand(Nsims) < prob
 
         buySellMO = (
             2 * (torch.rand(Nsims) < self.lambda_p / (self.lambda_p + self.lambda_m))

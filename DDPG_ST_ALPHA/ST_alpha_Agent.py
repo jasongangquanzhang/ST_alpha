@@ -553,74 +553,42 @@ class ST_alpha_Agent:
 
 
     def plot_policy(self, name=""):
-            """Plots the policy as a stacked area chart of buy, sell, and buy+sell regions."""
-            num_alpha_points = 101
-            alpha_values = torch.linspace(-0.02, 0.02, num_alpha_points)
-            inventory_levels = [-20, 0, 20]  # Example inventory levels to define regions
+        """Plots the policy as a heatmap showing the difference between buy and sell probabilities."""
+        num_alpha_points = 51
+        num_inventory_points = 51
+        alpha_values = torch.linspace(-0.02, 0.02, num_alpha_points)
+        inventory_levels = torch.linspace(-self.Nq, self.Nq, num_inventory_points)
 
-            policy_outputs = []
-            with torch.no_grad():
-                for alpha in alpha_values:
-                    # Assuming your policy network outputs two values representing something related to buy/sell
-                    # You'll need to adapt this based on the actual output of your network
+        policy_diff = np.zeros((num_inventory_points, num_alpha_points))
+
+        with torch.no_grad():
+            for i, q in enumerate(inventory_levels):
+                for j, alpha in enumerate(alpha_values):
                     state = self.__stack_state__(
                         t_Ndt=0.5 * torch.ones(1),
                         S=self.env.S_0 * torch.ones(1),
                         X=torch.zeros(1),
-                        alpha=alpha.unsqueeze(0),
-                        q=torch.tensor([0.0]),  # Fix inventory for this plot
+                        alpha=torch.tensor([alpha]),
+                        q=torch.tensor([q]),
                     )
                     policy_output = self.pi_main["net"](state).squeeze().numpy()
-                    policy_outputs.append(policy_output)
+                    # Assuming policy_output[0] is buy probability and policy_output[1] is sell probability
+                    policy_diff[i, j] = policy_output[0] - policy_output[1]
 
-            policy_outputs = np.array(policy_outputs)
-
-            # Assuming policy_outputs[:, 0] relates to "buy" and policy_outputs[:, 1] relates to "sell"
-            # You'll need to adjust these conditions based on how your network is trained
-            buy_strength = policy_outputs[:, 0]
-            sell_strength = policy_outputs[:, 1]
-
-            # Define regions based on the relative strength of buy and sell signals
-            buy_region = buy_strength > sell_strength + 0.1  # Example threshold
-            sell_region = sell_strength > buy_strength + 0.1 # Example threshold
-            buy_sell_region = np.logical_and(buy_strength <= sell_strength + 0.1, sell_strength <= buy_strength + 0.1)
-
-            # Map boolean regions to inventory levels for plotting
-            buy_inventory = np.where(buy_region, 20, -20)
-            sell_inventory = np.where(sell_region, 20, -20)
-            buy_sell_inventory = np.where(buy_sell_region, 20, -20)
-
-            plt.figure(figsize=(8, 6))
-
-            plt.stackplot(
-                alpha_values.numpy(),
-                np.where(sell_region, 20, 0),
-                np.where(buy_sell_region, 20, 0),
-                np.where(buy_region, 20, 0),
-                colors=['#ff7f7f', '#8ac98a', '#8181f7'],  # Light red, light green, light blue
-                edgecolor='k',
-                linewidth=0.5,
-                labels=['sell', 'buy + sell', 'buy'],
-                step='pre'
-            )
-            plt.stackplot(
-                alpha_values.numpy(),
-                np.where(sell_region, -20, 0),
-                np.where(buy_sell_region, -20, 0),
-                np.where(buy_region, -20, 0),
-                colors=['#ff7f7f', '#8ac98a', '#8181f7'],
-                edgecolor='k',
-                linewidth=0.5,
-                step='pre'
-            )
-
-            plt.title("Asymptotic Strategy Posts", fontsize=16)
-            plt.xlabel(r"$\alpha$", fontsize=14)
-            plt.ylabel("Inventory", fontsize=14)
-            plt.yticks(inventory_levels)
-            plt.xlim(alpha_values.min().item(), alpha_values.max().item())
-            plt.ylim(-22, 22)
-            plt.legend(loc='upper left')
-            plt.grid(False)
-            plt.tight_layout()
-            plt.show()
+        plt.figure(figsize=(8, 6))
+        plt.contourf(
+            alpha_values.numpy(),
+            inventory_levels.numpy(),
+            policy_diff,
+            levels=21,
+            cmap="RdBu",
+            alpha=0.8,
+        )
+        plt.colorbar(label="Buy - Sell Probability")
+        plt.axhline(0, linestyle="--", color="k", linewidth=0.8)
+        plt.axvline(0, linestyle="--", color="k", linewidth=0.8)
+        plt.title("Policy Heatmap", fontsize=16)
+        plt.xlabel(r"$\alpha$", fontsize=14)
+        plt.ylabel("Inventory", fontsize=14)
+        plt.tight_layout()
+        plt.show()
