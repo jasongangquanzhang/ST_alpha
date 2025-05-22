@@ -166,5 +166,9 @@ class ST_alpha_env:
             + torch.mul(S + 0.5 * self.Delta, isfilled_p)
         )
         # calculate reward
-        reward = (X_p - X) + (q_p - q) * S_p
+        liquidation_price = S_p - 0.5 * self.Delta - self.varphi * q_p
+
+        # Final reward (no running cost since φ = 0)
+        reward = (X_p - X) + (q_p - q) * liquidation_price
+        # reward = (X_p - X) + (q_p - q) * S_p
         return S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO
