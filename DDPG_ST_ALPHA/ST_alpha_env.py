@@ -61,11 +61,10 @@ class ST_alpha_env:
         return torch.exp(-0.5 * sigma**2 + sigma * torch.randn(mini_batch_size))
 
     def Randomize_Start(self, mini_batch_size=10):
-        # Randomize starting price and inventory
         S0 = self.S_0 + self.sigma * torch.randn(mini_batch_size)
-        q0 = torch.full((mini_batch_size, 1), self.q_0).squeeze()
-        X0 = torch.full((mini_batch_size, 1), self.X_0).squeeze()
-        alpha0 = torch.zeros((mini_batch_size, 1)).squeeze()
+        q0 = torch.randint(-self.Nq, self.Nq + 1, (mini_batch_size,), dtype=torch.float32)
+        X0 = torch.zeros(mini_batch_size)  # or small noise if you prefer
+        alpha0 = (torch.rand(mini_batch_size) - 0.5) * 0.04  # Uniform in [-0.02, 0.02]
         return S0, q0, X0, alpha0
 
     def Simulate(self, mini_batch_size=10):
@@ -75,13 +74,13 @@ class ST_alpha_env:
         alpha = torch.zeros((mini_batch_size, self.Ndt)).float()
         q = torch.zeros((mini_batch_size, self.Ndt)).float()
         r = torch.zeros((mini_batch_size, self.Ndt)).float()
-        action = torch.zeros((mini_batch_size, 2)).float()
+        action = torch.zeros((mini_batch_size, 4)).float()
         S[:, 0] = self.S_0
         X[:, 0] = self.X_0
         alpha[:, 0] = 0
         q[:, 0] = self.q_0
-        action[:, 0] = 0
-        action[:, 1] = 0
+        # action[:, 0] = 0
+        # action[:, 1] = 0
 
         for t in tqdm(range(self.Ndt - 1)):
             # not finished
@@ -172,6 +171,6 @@ class ST_alpha_env:
         liquidation_price = S_p - 0.5 * self.Delta - self.varphi * q_p
 
         # Final reward (no running cost since φ = 0)
-        reward = (X_p - X) + (q_p - q) * liquidation_price
-        # reward = (X_p - X) + (q_p - q) * S_p
+        # reward = (X_p - X) + (q_p - q) * liquidation_price
+        reward = (X_p - X) + (q_p - q) * S_p
         return S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO

@@ -30,6 +30,7 @@ class ANN(nn.Module):
         nLayers,
         activation="relu",
         out_activation=None,
+        temperature=1.5,
         scale=1,
     ):
         super(ANN, self).__init__()
@@ -50,6 +51,7 @@ class ANN(nn.Module):
 
         self.out_activation = out_activation
         self.scale = scale
+        self.temperature = temperature
 
     def forward(self, x):
 
@@ -67,7 +69,7 @@ class ANN(nn.Module):
         elif self.out_activation == "sigmoid":
             y = torch.sigmoid(y)
         elif self.out_activation == "softmax":
-            y = torch.softmax(y, dim=1)
+            y = torch.softmax(y / self.temperature, dim=1)
 
         # y = self.scale * y
 
@@ -216,9 +218,11 @@ class ST_alpha_Agent:
                 action = torch.nn.functional.one_hot(
                     torch.randint(0, 4, (mini_batch_size,)), num_classes=4
                 ).float()
+                print("RANDOM ACTION:", action)
             else:
                 # Sample from the policy's softmax output
                 action = self.pi_main["net"](state[:, [2, 4]]).detach()
+                print("POLICY ACTION:", action)
             # compute the value of the action I_p given state X
             Q = self.Q_main["net"](torch.cat((state[:, [2, 4]], action), axis=1))
 
@@ -226,7 +230,7 @@ class ST_alpha_Agent:
             S_p, X_p, alpha_p, q_p, r, isMO, buySellMO = self.env.step(
                 t_Ndt=t_Ndt, S=S, X=X, alpha=alpha, q=q, action=action
             )
-
+            print("R:", r)
             # compute the Q(S', a*)
             # concatenate new state
             state_p = self.__stack_state__(
@@ -234,8 +238,16 @@ class ST_alpha_Agent:
             )
 
             # optimal policy at t+1 get the next action action_p
-            action_p = self.pi_main["net"](state_p[:, [2, 4]]).detach()
-
+            if np.random.rand() < epsilon:
+                # Random action (uniform exploration)
+                action_p = torch.nn.functional.one_hot(
+                    torch.randint(0, 4, (mini_batch_size,)), num_classes=4
+                ).float()
+                # print("RANDOM ACTION:", action_p)
+            else:
+                # Sample from the policy's softmax output
+                action_p = self.pi_main["net"](state[:, [2, 4]]).detach()
+                # print("POLICY ACTION:", action_p)
             # compute the target for Q
             # NOTE: the target is not clipped and Q_target is used
             target = r.reshape(-1, 1).detach() + self.gamma * self.Q_target["net"](
@@ -267,11 +279,12 @@ class ST_alpha_Agent:
             state = self.__stack_state__(t_Ndt=t_Ndt, S=S, q=q, X=X, alpha=alpha)
 
             action = self.pi_main["net"](state[:, [2, 4]])
-
+            # probs = self.pi_main["net"](torch.tensor([[0.0, 0.0]]) )
+            # print("Action probabilities:", probs.detach().numpy())
             Q = self.Q_main["net"](torch.cat((state[:, [2, 4]], action), axis=1))
-            # entropy = -torch.mean(action * torch.log(action + 1e-8))
-            # loss = -torch.mean(Q) + 0.01 * entropy
-            loss = -torch.mean(Q)
+            entropy = -torch.mean(action * torch.log(action + 1e-8))
+            loss = -torch.mean(Q) + 0.01 * entropy
+            # loss = -torch.mean(Q)
 
             loss.backward()
             self.pi_main["optimizer"].step()
@@ -303,7 +316,7 @@ class ST_alpha_Agent:
         # for i in tqdm(range(n_iter)):
         for i in range(n_iter):
 
-            epsilon = np.maximum(C / (D + self.count), 0.2)
+            epsilon = np.maximum(C / (D + self.count), 0.02)
             self.epsilon.append(epsilon)
             self.count += 1
 
