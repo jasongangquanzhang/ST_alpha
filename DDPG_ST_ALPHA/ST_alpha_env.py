@@ -155,8 +155,8 @@ class ST_alpha_env:
         # time state
         # t_p = t + self.dt
         # Update Inventory
-        isfilled_p = action[:, 0].int() * isMO.int() * (buySellMO == 1).int()
-        isfilled_m = action[:, 1].int() * isMO.int() * (buySellMO == -1).int()
+        isfilled_p = action[:, 1].int() * isMO.int() * (buySellMO == 1).int()  #sell order + MO arrive + it is a buy order
+        isfilled_m = action[:, 0].int() * isMO.int() * (buySellMO == -1).int() # buy order + MO arrive + it is a sell order
 
         q_p = q + isfilled_m - isfilled_p
         # update cash
@@ -169,6 +169,6 @@ class ST_alpha_env:
         liquidation_price = S_p - 0.5 * self.Delta - self.varphi * q_p
 
         # Final reward (no running cost since φ = 0)
-        reward = (X_p - X) + (q_p - q) * liquidation_price
-        # reward = (X_p - X) + (q_p - q) * S_p
+        # reward = (X_p - X) + (q_p - q) * liquidation_price
+        reward = (X_p - X) + (q_p - q) * S_p
         return S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO

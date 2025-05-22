@@ -173,7 +173,7 @@ class ST_alpha_Agent:
             (
                 t_Ndt.unsqueeze(-1),
                 S.unsqueeze(-1) / self.env.S_0 - 1.0,
-                alpha.unsqueeze(-1),
+                alpha.unsqueeze(-1) / 0.02,
                 X.unsqueeze(-1),
                 q.unsqueeze(-1) / self.Nq,
             ),
@@ -235,7 +235,7 @@ class ST_alpha_Agent:
 
             # compute the target for Q
             # NOTE: the target is not clipped and Q_target is used
-            target = r.reshape(-1, 1) + self.gamma * self.Q_target["net"](
+            target = r.reshape(-1, 1).detach() + self.gamma * self.Q_target["net"](
                 torch.cat((state_p[:, [2, 4]], action_p), axis=1)
             )
 
@@ -266,7 +266,8 @@ class ST_alpha_Agent:
             action = self.pi_main["net"](state[:, [2, 4]])
 
             Q = self.Q_main["net"](torch.cat((state[:, [2, 4]], action), axis=1))
-
+            # entropy = -torch.mean(action * torch.log(action + 1e-8))
+            # loss = -torch.mean(Q) + 0.01 * entropy
             loss = -torch.mean(Q)
 
             loss.backward()
@@ -476,9 +477,9 @@ class ST_alpha_Agent:
 
         plt.tight_layout()
 
-        plt.savefig(
-            "path_" + self.name + "_" + name + ".pdf", format="pdf", bbox_inches="tight"
-        )
+        # plt.savefig(
+        #     "path_" + self.name + "_" + name + ".pdf", format="pdf", bbox_inches="tight"
+        # )
         plt.show()
 
         # zy0 = self.env.swap_price(zx[0,0], rx[0,0], ry[0,0])
