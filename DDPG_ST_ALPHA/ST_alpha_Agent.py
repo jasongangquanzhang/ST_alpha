@@ -66,6 +66,8 @@ class ANN(nn.Module):
             y = torch.tanh(y)
         elif self.out_activation == "sigmoid":
             y = torch.sigmoid(y)
+        elif self.out_activation == "softmax":
+            y = torch.softmax(y, dim=1)
 
         # y = self.scale * y
 
@@ -117,10 +119,10 @@ class ST_alpha_Agent:
         self.pi_main = {
             "net": ANN(
                 n_in=2,
-                n_out=2,
+                n_out=4,
                 nNodes=self.n_nodes,
                 nLayers=self.n_layers,
-                out_activation="sigmoid",
+                out_activation="softmax",
                 scale=self.Nq,
             )
         }
@@ -136,7 +138,7 @@ class ST_alpha_Agent:
         # features = t/T, S, X, alpha, q, action
         #
         self.Q_main = {
-            "net": ANN(n_in=4, n_out=1, nNodes=self.n_nodes, nLayers=self.n_layers)
+            "net": ANN(n_in=6, n_out=1, nNodes=self.n_nodes, nLayers=self.n_layers)
         }
 
         self.Q_main["optimizer"], self.Q_main["scheduler"] = self.__get_optim_sched__(
@@ -208,14 +210,15 @@ class ST_alpha_Agent:
             state = self.__stack_state__(t_Ndt=t_Ndt, S=S, q=q, X=X, alpha=alpha)
 
             # compute the action
-            action = torch.clamp(
-                self.pi_main["net"](state[:, [2, 4]]).detach()
-                + torch.normal(
-                    0, epsilon, size=self.pi_main["net"](state[:, [2, 4]]).shape
-                ),
-                0.0,
-                1.0,
-            )
+            
+            if np.random.rand() < epsilon:
+                # Random action (uniform exploration)
+                action = torch.nn.functional.one_hot(
+                    torch.randint(0, 4, (mini_batch_size,)), num_classes=4
+                ).float()
+            else:
+                # Sample from the policy's softmax output
+                action = self.pi_main["net"](state[:, [2, 4]]).detach()
             # compute the value of the action I_p given state X
             Q = self.Q_main["net"](torch.cat((state[:, [2, 4]], action), axis=1))
 
@@ -300,7 +303,7 @@ class ST_alpha_Agent:
         # for i in tqdm(range(n_iter)):
         for i in range(n_iter):
 
-            epsilon = np.maximum(C / (D + self.count), 0.02)
+            epsilon = np.maximum(C / (D + self.count), 0.2)
             self.epsilon.append(epsilon)
             self.count += 1
 
@@ -386,7 +389,7 @@ class ST_alpha_Agent:
         q = torch.zeros((nsims, N + 1)).float()
         X = torch.zeros((nsims, N + 1)).float()
         alpha = torch.zeros((nsims, N + 1)).float()
-        action = torch.zeros((nsims, N, 2)).float()
+        action = torch.zeros((nsims, N, 4)).float()
         r = torch.zeros((nsims, N)).float()
         # keep track of market orders
         isMO = torch.zeros((nsims, N)).float()
@@ -552,14 +555,14 @@ class ST_alpha_Agent:
 
 
     def plot_policy(self, name=""):
-        """Plots the policy as a heatmap showing the difference between buy and sell probabilities."""
+        """Plots the policy as a single heatmap showing the action with the highest probability."""
         num_alpha_points = 51
         num_inventory_points = 51
-        alpha_values = torch.linspace(-0.1, 0.1, num_alpha_points)
-        inventory_levels = torch.linspace(-40, 40, num_inventory_points)
+        alpha_values = torch.linspace(-0.02, 0.02, num_alpha_points)
+        inventory_levels = torch.linspace(-self.Nq, self.Nq, num_inventory_points)
 
-        policy_buy = np.zeros((num_inventory_points, num_alpha_points))
-        policy_sell = np.zeros((num_inventory_points, num_alpha_points))
+        max_prob_action = np.zeros((num_inventory_points, num_alpha_points))
+        max_prob_value = np.zeros((num_inventory_points, num_alpha_points))
         with torch.no_grad():
             for i, q in enumerate(inventory_levels):
                 for j, alpha in enumerate(alpha_values):
@@ -571,36 +574,22 @@ class ST_alpha_Agent:
                         q=torch.tensor([q]),
                     )
                     policy_output = self.pi_main["net"](state[:, [2, 4]]).squeeze().numpy()
-                    # Assuming policy_output[0] is buy probability and policy_output[1] is sell probability
-                    buy_prob = policy_output[0]
-                    sell_prob = policy_output[1]
+                    max_prob_action[i, j] = np.argmax(policy_output)
+                    max_prob_value[i, j] = np.max(policy_output)
 
-                    # Classify into scenarios: 00, 10, 01, 11
-                    if buy_prob < 0.5 and sell_prob < 0.5:
-                        policy_buy[i, j] = 0  # Scenario 00
-                    elif buy_prob >= 0.5 and sell_prob < 0.5:
-                        policy_buy[i, j] = 1  # Scenario 10
-                    elif buy_prob < 0.5 and sell_prob >= 0.5:
-                        policy_buy[i, j] = 2  # Scenario 01
-                    elif buy_prob >= 0.5 and sell_prob >= 0.5:
-                        policy_buy[i, j] = 3  # Scenario 11
-
-        plt.figure(figsize=(8, 6))
+        plt.figure(figsize=(10, 8))
         plt.contourf(
             alpha_values.numpy(),
             inventory_levels.numpy(),
-            policy_buy,
-            levels=[-0.5, 0.5, 1.5, 2.5, 3.5],
-            cmap="tab10",
+            max_prob_action,
+            levels=np.arange(-0.5, 4, 1),
+            cmap="viridis",
             alpha=0.8,
         )
-        plt.colorbar(
-            ticks=[0, 1, 2, 3],
-            label="Scenarios (00: 0, 10: 1, 01: 2, 11: 3)",
-        )
+        plt.colorbar(ticks=range(4), label="Action with Max Probability")
         plt.axhline(0, linestyle="--", color="k", linewidth=0.8)
         plt.axvline(0, linestyle="--", color="k", linewidth=0.8)
-        plt.title("Policy Heatmap - Scenarios", fontsize=16)
+        plt.title("Policy Heatmap - Action with Max Probability", fontsize=16)
         plt.xlabel(r"$\alpha$", fontsize=14)
         plt.ylabel("Inventory", fontsize=14)
         plt.tight_layout()

@@ -122,7 +122,7 @@ class ST_alpha_env:
             X (torch.Tensor): Current cash, shape (Nsims,)
             alpha (torch.Tensor): Current alpha, shape (Nsims,)
             q (torch.Tensor): Current inventory, shape (Nsims,)
-            action (torch.Tensor): Actions, shape (Nsims, 2), where action[:,0] is buy, action[:,1] is sell.
+            action (torch.Tensor): Actions, shape (Nsims, 4), the first is probably of do nothing, second is buy, third is sell, fourth is market order
 
         Returns:
             S_p (torch.Tensor): Next price, shape (Nsims,)
@@ -135,9 +135,10 @@ class ST_alpha_env:
         """
 
         Nsims = S.size(0)
-        # Action is a 2D tensor with shape (Nsims, 2)
-        # action[:, 0] is buy, action[:, 1] is sell probability
-        action = torch.bernoulli(action)
+        # Action is a 2D tensor with shape (Nsims, 4)
+        # action[:, 0] is prob of do nothing, action[:, 1] is buy, action[:, 2] is sell, action[:, 3] is buy and sell
+        action_sampled = torch.multinomial(action, num_samples=1).squeeze()
+        
         isMO = torch.rand(Nsims) < torch.round(
             (1 - torch.exp(torch.tensor(-self.dt * (self.lambda_p + self.lambda_m)))),
             decimals=4,
@@ -155,8 +156,10 @@ class ST_alpha_env:
         # time state
         # t_p = t + self.dt
         # Update Inventory
-        isfilled_p = action[:, 1].int() * isMO.int() * (buySellMO == 1).int()  #sell order + MO arrive + it is a buy order
-        isfilled_m = action[:, 0].int() * isMO.int() * (buySellMO == -1).int() # buy order + MO arrive + it is a sell order
+        isfilled_p = (action_sampled == 2).int() * isMO.int() * (buySellMO == 1).int() + \
+                 (action_sampled == 3).int() * isMO.int() * (buySellMO == 1).int()
+        isfilled_m = (action_sampled == 1).int() * isMO.int() * (buySellMO == -1).int() + \
+                 (action_sampled == 3).int() * isMO.int() * (buySellMO == -1).int()
 
         q_p = q + isfilled_m - isfilled_p
         # update cash
@@ -169,6 +172,6 @@ class ST_alpha_env:
         liquidation_price = S_p - 0.5 * self.Delta - self.varphi * q_p
 
         # Final reward (no running cost since φ = 0)
-        # reward = (X_p - X) + (q_p - q) * liquidation_price
-        reward = (X_p - X) + (q_p - q) * S_p
+        reward = (X_p - X) + (q_p - q) * liquidation_price
+        # reward = (X_p - X) + (q_p - q) * S_p
         return S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO
