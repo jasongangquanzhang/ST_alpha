@@ -47,5 +47,7 @@ class ShortTermalpha:
         Nsims = alpha_current.shape[0]
         noise = self.eta * np.sqrt(dt) * np.random.randn(Nsims)
         mo_impact = self.epsilon * np.multiply(isMO, buySellMO)
+        alpha_decay = (1 - self.zeta * dt) * alpha_current
         next_alpha = np.exp(-self.zeta * dt) * alpha_current + noise + mo_impact
+        # next_alpha = alpha_decay + noise + mo_impact
         return next_alpha

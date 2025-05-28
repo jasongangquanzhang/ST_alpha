@@ -173,4 +173,5 @@ class ST_alpha_env:
         # Final reward (no running cost since φ = 0)
         # reward = (X_p - X) + (q_p - q) * liquidation_price
         reward = (X_p - X) + (q_p - q) * S_p
+        # reward = (X_p - X) + q_p * (S_p-S)
         return S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO
