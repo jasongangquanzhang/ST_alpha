@@ -50,8 +50,10 @@ class ST_alpha_env:
         self.sigma = sigma
 
         # order entry parameters
-        self.lambda_p = 0.5 * Nq / POV / T
-        self.lambda_m = 0.5 * Nq / POV / T
+        # self.lambda_p = 0.5 * Nq / POV / T
+        # self.lambda_m = 0.5 * Nq / POV / T
+        self.lambda_p = 5/6
+        self.lambda_m = 5/6
         # self.Ndt = math.floor((self.lambda_p + self.lambda_m) * T * 5)
         self.Ndt = 200
         self.T = T  # total time
@@ -172,6 +174,6 @@ class ST_alpha_env:
 
         # Final reward (no running cost since φ = 0)
         # reward = (X_p - X) + (q_p - q) * liquidation_price
-        reward = (X_p - X) + (q_p - q) * S_p
-        # reward = (X_p - X) + q_p * (S_p-S)
+        # reward = (X_p - X) + (q_p - q) * S_p
+        reward = (X_p - X) + q_p * (S_p - 0.5 * self.Delta - self.varphi * q_p) - q * (S - 0.5 * self.Delta - self.varphi * q)
         return S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO
