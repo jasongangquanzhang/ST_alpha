@@ -64,7 +64,7 @@ class ST_alpha_env:
 
     def Randomize_Start(self, mini_batch_size=10):
         S0 = self.S_0 + self.sigma * torch.randn(mini_batch_size)
-        q0 = torch.randint(-self.Nq, self.Nq + 1, (mini_batch_size,), dtype=torch.float32)
+        q0 = torch.zeros(mini_batch_size)
         X0 = torch.zeros(mini_batch_size)  # or small noise if you prefer
         alpha0 = (torch.rand(mini_batch_size) - 0.5) * 0.04  # Uniform in [-0.02, 0.02]
         return S0, q0, X0, alpha0
@@ -176,4 +176,6 @@ class ST_alpha_env:
         # reward = (X_p - X) + (q_p - q) * liquidation_price
         # reward = (X_p - X) + (q_p - q) * S_p
         reward = (X_p - X) + q_p * (S_p - 0.5 * self.Delta - self.varphi * q_p) - q * (S - 0.5 * self.Delta - self.varphi * q)
+        reward = reward = (X_p + q_p * S_p) - (X + q * S)
+
         return S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO
