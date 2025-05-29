@@ -30,7 +30,7 @@ class ANN(nn.Module):
         nLayers,
         activation="relu",
         out_activation=None,
-        temperature=1.5,
+        temperature=100,
         scale=1,
     ):
         super(ANN, self).__init__()
@@ -86,6 +86,7 @@ class ST_alpha_Agent:
         n_layers=6,
         lr=1e-3,
         sched_step_size=100,
+        tau=0.01,
         name="",
     ):
 
@@ -110,7 +111,7 @@ class ST_alpha_Agent:
         self.Q_loss = []
         self.pi_loss = []
 
-        self.tau = 0.001
+        self.tau = tau
 
     def __initialize_NNs__(self):
 
@@ -225,6 +226,7 @@ class ST_alpha_Agent:
                 print("POLICY ACTION:", action)
             # compute the value of the action I_p given state X
             Q = self.Q_main["net"](torch.cat((state[:, [2, 4]], action), axis=1))
+            print("Q:", Q)
 
             # step in the environment get the next state and reward
             S_p, X_p, alpha_p, q_p, r, isMO, buySellMO = self.env.step(
@@ -248,6 +250,7 @@ class ST_alpha_Agent:
                 # Sample from the policy's softmax output
                 action_p = self.pi_main["net"](state[:, [2, 4]]).detach()
                 # print("POLICY ACTION:", action_p)
+            # action_p = self.pi_main["net"](state[:, [2, 4]]).detach()
             # compute the target for Q
             # NOTE: the target is not clipped and Q_target is used
             target = r.reshape(-1, 1).detach() + self.gamma * self.Q_target["net"](
@@ -282,9 +285,9 @@ class ST_alpha_Agent:
             # probs = self.pi_main["net"](torch.tensor([[0.0, 0.0]]) )
             # print("Action probabilities:", probs.detach().numpy())
             Q = self.Q_main["net"](torch.cat((state[:, [2, 4]], action), axis=1))
-            entropy = -torch.mean(action * torch.log(action + 1e-8))
-            loss = -torch.mean(Q) + 0.01 * entropy
-            # loss = -torch.mean(Q)
+            # entropy = -torch.mean(action * torch.log(action + 1e-8))
+            # loss = -torch.mean(Q) + 0.01 * entropy
+            loss = -torch.mean(Q)
 
             loss.backward()
             self.pi_main["optimizer"].step()
