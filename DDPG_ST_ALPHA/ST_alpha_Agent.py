@@ -21,7 +21,6 @@ from datetime import datetime
 
 
 class ANN(nn.Module):
-
     def __init__(
         self,
         n_in,
@@ -30,38 +29,46 @@ class ANN(nn.Module):
         nLayers,
         activation="relu",
         out_activation=None,
-        temperature=100,
+        temperature=30,
         scale=1,
     ):
         super(ANN, self).__init__()
 
         self.prop_in_to_h = nn.Linear(n_in, nNodes)
 
-        self.prop_h_to_h = nn.ModuleList(
-            [nn.Linear(nNodes, nNodes) for i in range(nLayers - 1)]
-        )
+        self.prop_h_to_h = nn.ModuleList([
+            nn.Linear(nNodes, nNodes) for _ in range(nLayers - 1)
+        ])
+
+        # Add LayerNorm for each hidden layer
+        self.norms = nn.ModuleList([
+            nn.LayerNorm(nNodes) for _ in range(nLayers - 1)
+        ])
 
         self.prop_h_to_out = nn.Linear(nNodes, n_out)
 
+        # Activation function
         if activation == "silu":
             self.g = nn.SiLU()
         elif activation == "relu":
             self.g = nn.ReLU()
-
+        elif activation == "gelu":
+            self.g = nn.GELU()
+        elif activation == "leakyrelu":
+            self.g = nn.LeakyReLU(0.01)
+        else:
+            raise ValueError(f"Unsupported activation: {activation}")
 
         self.out_activation = out_activation
-        self.scale = scale
         self.temperature = temperature
+        self.scale = scale
 
     def forward(self, x):
-
-        # input into  hidden layer
         h = self.g(self.prop_in_to_h(x))
 
-        for prop in self.prop_h_to_h:
-            h = self.g(prop(h))
+        for i, layer in enumerate(self.prop_h_to_h):
+            h = self.g(self.norms[i](layer(h)))
 
-        # hidden layer to output layer
         y = self.prop_h_to_out(h)
 
         if self.out_activation == "tanh":
@@ -70,8 +77,6 @@ class ANN(nn.Module):
             y = torch.sigmoid(y)
         elif self.out_activation == "softmax":
             y = torch.softmax(y / self.temperature, dim=1)
-
-        # y = self.scale * y
 
         return y
 
@@ -490,9 +495,10 @@ class ST_alpha_Agent:
         plot(t, q, 2, r"$q_t$")
 
         plot(t[:-1], np.cumsum(r, axis=1), 3, r"$r_t$")
+        plot(t, X+S*q , 4, r"$Wealth$")
 
         plt.subplot(2, 2, 4)
-        plt.hist(np.sum(r, axis=1), bins=51)
+        # plt.hist(np.sum(r, axis=1), bins=51)
 
         plt.tight_layout()
 
