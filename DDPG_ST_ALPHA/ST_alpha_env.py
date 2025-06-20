@@ -118,7 +118,7 @@ class ST_alpha_env:
             X (torch.Tensor): Current cash, shape (Nsims,)
             alpha (torch.Tensor): Current alpha, shape (Nsims,)
             q (torch.Tensor): Current inventory, shape (Nsims,)
-            action (torch.Tensor): 0 = do nothing, 1 = buy, 2 = sell, 3 = buy and sell, shape (Nsims, 1)
+            action (torch.Tensor): 0 = do nothing, 1 = buy, 2 = sell, 3 = buy and sell, shape (Nsims,)
 
         Returns:
             S_p (torch.Tensor): Next price, shape (Nsims,)
@@ -150,12 +150,9 @@ class ST_alpha_env:
         # time state
         # t_p = t + self.dt
         # Update Inventory
-        isfilled_p = (action == 2).int() * isMO.int() * (buySellMO == 1).int() + (
-            action == 3
-        ).int() * isMO.int() * (buySellMO == 1).int()
-        isfilled_m = (action == 1).int() * isMO.int() * (buySellMO == -1).int() + (
-            action == 3
-        ).int() * isMO.int() * (buySellMO == -1).int()
+        isfilled_p = ((action == 2) | (action == 3)).int() * isMO.int() * (buySellMO == 1).int()
+        isfilled_m = ((action == 1) | (action == 3)).int() * isMO.int() * (buySellMO == -1).int()
+
 
         q_p = q + isfilled_m - isfilled_p
         # update cash
