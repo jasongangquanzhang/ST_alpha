@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 plt.style.use("paper.mplstyle")
 from ShortTermalpha import ShortTermalpha
 from ST_alpha_env import ST_alpha_env
-from DDPG_ST_ALPHA.ST_alpha_Agent import ST_alpha_Agent
+from DDPG_ST_ALPHA.ST_alpha_DPG import ST_alpha_Agent
 
 # %%
 short_term_alpha = ShortTermalpha(zeta=0.5, epsilon=0.002, eta=0.001)
