@@ -36,14 +36,12 @@ class ANN(nn.Module):
 
         self.prop_in_to_h = nn.Linear(n_in, nNodes)
 
-        self.prop_h_to_h = nn.ModuleList([
-            nn.Linear(nNodes, nNodes) for _ in range(nLayers - 1)
-        ])
+        self.prop_h_to_h = nn.ModuleList(
+            [nn.Linear(nNodes, nNodes) for _ in range(nLayers - 1)]
+        )
 
         # Add LayerNorm for each hidden layer
-        self.norms = nn.ModuleList([
-            nn.LayerNorm(nNodes) for _ in range(nLayers - 1)
-        ])
+        self.norms = nn.ModuleList([nn.LayerNorm(nNodes) for _ in range(nLayers - 1)])
 
         self.prop_h_to_out = nn.Linear(nNodes, n_out)
 
@@ -143,10 +141,10 @@ class ST_alpha_Agent:
 
         # Q - function approximation
         #
-        # features = t/T, S, X, alpha, q, action
+        # features = alpha, q, action
         #
         self.Q_main = {
-            "net": ANN(n_in=6, n_out=1, nNodes=self.n_nodes, nLayers=self.n_layers)
+            "net": ANN(n_in=3, n_out=1, nNodes=self.n_nodes, nLayers=self.n_layers)
         }
 
         self.Q_main["optimizer"], self.Q_main["scheduler"] = self.__get_optim_sched__(
@@ -181,10 +179,10 @@ class ST_alpha_Agent:
         """
         return torch.cat(
             (
-                t_Ndt.unsqueeze(-1),
-                S.unsqueeze(-1) / self.env.S_0 - 1.0,
+                # t_Ndt.unsqueeze(-1),
+                # S.unsqueeze(-1) / self.env.S_0 - 1.0,
                 alpha.unsqueeze(-1) / 0.02,
-                X.unsqueeze(-1),
+                # X.unsqueeze(-1),
                 q.unsqueeze(-1) / self.Nq,
             ),
             axis=-1,
@@ -218,24 +216,25 @@ class ST_alpha_Agent:
             state = self.__stack_state__(t_Ndt=t_Ndt, S=S, q=q, X=X, alpha=alpha)
 
             # compute the action
-            
+
             if np.random.rand() < epsilon:
                 # Random action (uniform exploration)
-                action = torch.nn.functional.one_hot(
-                    torch.randint(0, 4, (mini_batch_size,)), num_classes=4
-                ).float()
+                action = torch.randint(0, 4, (mini_batch_size,)).unsqueeze(1)
                 print("RANDOM ACTION:", action)
             else:
                 # Sample from the policy's softmax output
-                action = self.pi_main["net"](state[:, [2, 4]]).detach()
+                action = torch.multinomial(
+                    self.pi_main["net"](state).detach(), num_samples=1
+                )
                 print("POLICY ACTION:", action)
+
             # compute the value of the action I_p given state X
-            Q = self.Q_main["net"](torch.cat((state[:, [2, 4]], action), axis=1))
+            Q = self.Q_main["net"](torch.cat((state, action), axis=1))
             print("Q:", Q)
 
             # step in the environment get the next state and reward
             S_p, X_p, alpha_p, q_p, r, isMO, buySellMO = self.env.step(
-                t_Ndt=t_Ndt, S=S, X=X, alpha=alpha, q=q, action=action
+                t_Ndt=t_Ndt, S=S, X=X, alpha=alpha, q=q, action=action.squeeze(1)
             )
             print("R:", r)
             # compute the Q(S', a*)
@@ -247,19 +246,19 @@ class ST_alpha_Agent:
             # optimal policy at t+1 get the next action action_p
             if np.random.rand() < epsilon:
                 # Random action (uniform exploration)
-                action_p = torch.nn.functional.one_hot(
-                    torch.randint(0, 4, (mini_batch_size,)), num_classes=4
-                ).float()
+                action_p = torch.randint(0, 4, (mini_batch_size,)).unsqueeze(1)
                 # print("RANDOM ACTION:", action_p)
             else:
                 # Sample from the policy's softmax output
-                action_p = self.pi_main["net"](state[:, [2, 4]]).detach()
+                action_p = torch.multinomial(
+                    self.pi_main["net"](state_p).detach(), num_samples=1
+                )
                 # print("POLICY ACTION:", action_p)
-            # action_p = self.pi_main["net"](state[:, [2, 4]]).detach()
+
             # compute the target for Q
             # NOTE: the target is not clipped and Q_target is used
             target = r.reshape(-1, 1).detach() + self.gamma * self.Q_target["net"](
-                torch.cat((state_p[:, [2, 4]], action_p), axis=1)
+                torch.cat((state_p, action_p), axis=1)
             )
 
             loss = torch.mean((target.detach() - Q) ** 2)
@@ -286,10 +285,10 @@ class ST_alpha_Agent:
             # concatenate states
             state = self.__stack_state__(t_Ndt=t_Ndt, S=S, q=q, X=X, alpha=alpha)
 
-            action = self.pi_main["net"](state[:, [2, 4]])
-            # probs = self.pi_main["net"](torch.tensor([[0.0, 0.0]]) )
-            # print("Action probabilities:", probs.detach().numpy())
-            Q = self.Q_main["net"](torch.cat((state[:, [2, 4]], action), axis=1))
+            action = torch.multinomial(
+                self.pi_main["net"](state), num_samples=1
+            )  # Sample action from the policy distribution
+            Q = self.Q_main["net"](torch.cat((state, action), axis=1))
             # entropy = -torch.mean(action * torch.log(action + 1e-8))
             # loss = -torch.mean(Q) + 0.01 * entropy
             loss = -torch.mean(Q)
@@ -410,7 +409,7 @@ class ST_alpha_Agent:
         q = torch.zeros((nsims, N + 1)).float()
         X = torch.zeros((nsims, N + 1)).float()
         alpha = torch.zeros((nsims, N + 1)).float()
-        action = torch.zeros((nsims, N, 4)).float()
+        action = torch.zeros((nsims, N)).float()
         r = torch.zeros((nsims, N)).float()
         # keep track of market orders
         isMO = torch.zeros((nsims, N)).float()
@@ -429,7 +428,9 @@ class ST_alpha_Agent:
                 t_Ndt=t_Ndt, S=S[:, t], X=X[:, t], alpha=alpha[:, t], q=q[:, t]
             )
             # compute the action
-            action[:, t] = self.pi_main["net"](state[:, [2, 4]])  # this returns a probability
+            action[:, t] = torch.multinomial(
+                self.pi_main["net"](state), num_samples=1
+            ).squeeze(1)
 
             (
                 S[:, t + 1],
@@ -468,7 +469,7 @@ class ST_alpha_Agent:
 
         t = self.env.dt * np.arange(0, N + 1) / self.env.T
 
-        plt.figure(figsize=(5, 5))
+        plt.figure(figsize=(10, 10))
         n_paths = 3
 
         def plot(t, x, plt_i, title):
@@ -479,7 +480,7 @@ class ST_alpha_Agent:
             qtl = np.quantile(x, [0.05, 0.5, 0.95], axis=0)
             # print(qtl.shape)
 
-            plt.subplot(2, 2, plt_i)
+            plt.subplot(2, 3, plt_i)
 
             plt.fill_between(t, qtl[0, :], qtl[2, :], alpha=0.5)
             plt.plot(t, qtl[1, :], color="k", linewidth=1)
@@ -489,15 +490,15 @@ class ST_alpha_Agent:
             plt.title(title)
             plt.xlabel(r"$t$")
 
-        # plot(t, (S - S[:, 0].reshape(S.shape[0], -1)), 1, r"$S_t-S_0$")
-        plot(t, alpha, 1, r"$\alpha_t$")
+        plot(t, (S), 1, r"$S_t$")
+        plot(t, alpha, 2, r"$\alpha_t$")
         # plot(t[1:], q[:, 1:] - q[:, :-1], 2, r"$q_t - q_{t-1}$")
-        plot(t, q, 2, r"$q_t$")
+        plot(t, q, 3, r"$q_t$")
 
-        plot(t[:-1], np.cumsum(r, axis=1), 3, r"$r_t$")
-        plot(t, X+S*q , 4, r"$Wealth$")
+        plot(t[:-1], np.cumsum(r, axis=1), 4, r"$r_t$")
+        plot(t, X + S * q, 5, r"$Wealth$")
 
-        plt.subplot(2, 2, 4)
+        plt.subplot(2, 3, 6)
         # plt.hist(np.sum(r, axis=1), bins=51)
 
         plt.tight_layout()
@@ -525,56 +526,8 @@ class ST_alpha_Agent:
 
         # print(zy0, np.mean(zy[:,-1]>zy0))
         # print(qtl)
-        return S, X, alpha, q, r, action, isMO, buySellMO
 
-
-    # def plot_policy(self, name=""):
-
-    #     NI = 51
-    #     q = torch.linspace(-self.Nq, self.Nq, NI)
-    #     NA = 51
-    #     alpha = torch.linspace(-0.02, 0.02, NA)
-
-    #     qm, alpha_m = torch.meshgrid(q, alpha, indexing="ij")
-
-    #     def plot(a, title):
-
-    #         fig, ax = plt.subplots()
-    #         plt.title("Inventory vs Alpha Heatmap for Action")
-
-    #         cs = plt.contourf(
-    #             qm.numpy(),
-    #             alpha_m.numpy(),
-    #             a,
-    #             levels=np.linspace(0, 1, 21),
-    #             cmap="RdBu",
-    #         )
-    #         plt.axhline(0, linestyle="--", color="k")
-    #         plt.axvline(0, linestyle="--", color="k")
-    #         ax.set_xlabel("Inventory")
-    #         ax.set_ylabel("Alpha")
-    #         ax.set_title(title)
-
-    #         cbar = fig.colorbar(cs, ax=ax, shrink=0.9)
-    #         cbar.set_ticks(np.linspace(0, 1, 11))
-    #         cbar.ax.set_ylabel("Probability")
-
-    #         plt.tight_layout()
-    #         plt.show()
-
-    #     X = self.__stack_state__(
-    #         t_Ndt=0.5 * torch.ones_like(alpha_m.flatten()),
-    #         S=self.env.S_0 * torch.ones_like(alpha_m.flatten()),
-    #         X=torch.zeros_like(alpha_m.flatten()),
-    #         alpha=alpha_m.flatten(),
-    #         q=qm.flatten(),
-    #     )
-
-    #     a = self.pi_main["net"](X).detach()
-
-    #     plot((a[:, 0] - a[:, 1]).reshape(alpha_m.shape), r"Buy sell Order Probability")
-    #     # plot(a[:, 1].reshape(alpha_m.shape), r"Sell Order Probability")
-
+        pass
 
     def plot_policy(self, name=""):
         """Plots the policy as a single heatmap showing the action with the highest probability."""
@@ -595,7 +548,7 @@ class ST_alpha_Agent:
                         alpha=torch.tensor([alpha]),
                         q=torch.tensor([q]),
                     )
-                    policy_output = self.pi_main["net"](state[:, [2, 4]]).squeeze().numpy()
+                    policy_output = self.pi_main["net"](state).squeeze().numpy()
                     max_prob_action[i, j] = np.argmax(policy_output)
                     max_prob_value[i, j] = np.max(policy_output)
 
@@ -617,7 +570,6 @@ class ST_alpha_Agent:
         plt.tight_layout()
         plt.show()
 
-
     def plot_policy2(self, name=""):
         """Plots the policy as heatmaps showing the probabilities for both buy and sell actions."""
         num_alpha_points = 51
@@ -637,7 +589,7 @@ class ST_alpha_Agent:
                         alpha=torch.tensor([alpha]),
                         q=torch.tensor([q]),
                     )
-                    policy_output = self.pi_main["net"](state[:, [2, 4]]).squeeze().numpy()
+                    policy_output = self.pi_main["net"](state).squeeze().numpy()
                     # Assuming policy_output[0] is buy probability and policy_output[1] is sell probability
                     policy_buy[i, j] = policy_output[0]
                     policy_sell[i, j] = policy_output[1]

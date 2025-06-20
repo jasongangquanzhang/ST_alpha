@@ -106,10 +106,10 @@ class ST_alpha_DDQN:
 
         # Q - function approximation
         #
-        # features = S, alpha, q
+        # features = alpha, q
         #
         self.Q_main = {
-            "net": DQN(n_in=4, n_out=4, nNodes=self.n_nodes, nLayers=self.n_layers)
+            "net": DQN(n_in=2, n_out=4, nNodes=self.n_nodes, nLayers=self.n_layers)
         }
 
         self.Q_main["optimizer"], self.Q_main["scheduler"] = self.__get_optim_sched__(
@@ -145,10 +145,10 @@ class ST_alpha_DDQN:
         return torch.cat(
             (
                 # t_Ndt.unsqueeze(-1),
-                S.unsqueeze(-1) / self.env.S_0 - 1.0,
-                alpha.unsqueeze(-1),
-                X.unsqueeze(-1),
-                q.unsqueeze(-1) / self.Nq - 1.0,
+                # S.unsqueeze(-1) / self.env.S_0 - 1.0,
+                alpha.unsqueeze(-1)/0.02,
+                # X.unsqueeze(-1),
+                q.unsqueeze(-1) / self.Nq,
             ),
             axis=-1,
         ).float()
@@ -373,7 +373,7 @@ class ST_alpha_DDQN:
         buySellMO = buySellMO.detach().numpy()
         t = self.env.dt * np.arange(0, N + 1) / self.env.T
 
-        plt.figure(figsize=(5, 5))
+        plt.figure(figsize=(10, 10))
         n_paths = 3
 
         def plot(t, x, plt_i, title):
@@ -454,7 +454,7 @@ class ST_alpha_DDQN:
                         q=torch.tensor([q]),
                     )
                     policy_output = self.Q_main["net"](state).argmax(dim=1, keepdim=False).squeeze().numpy()
-                    max_prob_action[i, j] = np.argmax(policy_output)
+                    max_prob_action[i, j] = policy_output
                     max_prob_value[i, j] = np.max(policy_output)
 
         plt.figure(figsize=(10, 8))
@@ -466,10 +466,10 @@ class ST_alpha_DDQN:
             cmap="viridis",
             alpha=0.8,
         )
-        plt.colorbar(ticks=range(4), label="Action with Max Probability")
+        plt.colorbar(ticks=range(4), label="Action")
         plt.axhline(0, linestyle="--", color="k", linewidth=0.8)
         plt.axvline(0, linestyle="--", color="k", linewidth=0.8)
-        plt.title("Policy Heatmap - Action with Max Probability", fontsize=16)
+        plt.title("Policy Heatmap - Action", fontsize=16)
         plt.xlabel(r"$\alpha$", fontsize=14)
         plt.ylabel("Inventory", fontsize=14)
         plt.tight_layout()
