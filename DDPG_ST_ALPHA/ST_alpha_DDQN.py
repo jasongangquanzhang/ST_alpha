@@ -147,7 +147,7 @@ class ST_alpha_DDQN:
                 # t_Ndt.unsqueeze(-1),
                 # S.unsqueeze(-1) / self.env.S_0 - 1.0,
                 alpha.unsqueeze(-1)/0.02,
-                # X.unsqueeze(-1),
+                # X.unsqueeze(-1), #TODO：try normalize in network
                 q.unsqueeze(-1) / self.Nq,
             ),
             axis=-1,
@@ -166,10 +166,10 @@ class ST_alpha_DDQN:
         # t[-int(mini_batch_size*0.05):] = self.env.N
 
         S, q, X, alpha = self.env.Randomize_Start(mini_batch_size)
-
+        # TODO: plot these to check these
         return t, S, q, X, alpha
 
-    def update_Q(self, n_iter=10, mini_batch_size=256, epsilon=0.02):
+    def update_Q(self, n_iter=10, mini_batch_size=256, epsilon=0.02):# TODO: make it time update not random
         for i in range(n_iter):
 
             t_Ndt, S, q, X, alpha = self.__grab_mini_batch__(mini_batch_size)
@@ -374,7 +374,7 @@ class ST_alpha_DDQN:
         t = self.env.dt * np.arange(0, N + 1) / self.env.T
 
         plt.figure(figsize=(10, 10))
-        n_paths = 3
+        n_paths = 10
 
         def plot(t, x, plt_i, title):
 

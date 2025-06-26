@@ -59,9 +59,9 @@ class ST_alpha_env:
     def lognormal(self, sigma, mini_batch_size=10):
         return torch.exp(-0.5 * sigma**2 + sigma * torch.randn(mini_batch_size))
 
-    def Randomize_Start(self, mini_batch_size=10):
+    def Randomize_Start(self, mini_batch_size=10):# TODO in each time of the training, all things should be randomized
         S0 = self.S_0 + self.sigma * torch.randn(mini_batch_size)
-        q0 = torch.zeros(mini_batch_size)
+        q0 = torch.randint(low=-20, high=20, size=(mini_batch_size,))
         X0 = torch.zeros(mini_batch_size)
         alpha0 = (torch.rand(mini_batch_size) - 0.5) * 0.04  # Uniform in [-0.02, 0.02]
         return S0, q0, X0, alpha0
@@ -167,6 +167,10 @@ class ST_alpha_env:
         # Final reward (no running cost since φ = 0)
         # reward = (X_p - X) + (q_p - q) * liquidation_price
         # reward = (X_p - X) + (q_p - q) * S_p
-        reward = (X_p - X) + q_p * (S_p - 0.5 * self.Delta - self.varphi * q_p) - q * (S - 0.5 * self.Delta - self.varphi * q)
+        # reward = (X_p - X) + q_p * (S_p - 0.5 * self.Delta - self.varphi * q_p) - q * (S - 0.5 * self.Delta - self.varphi * q)
+        reward = (isfilled_p + isfilled_m) * 0.5 * self.Delta + q * (S_p - S) - self.phi*(q**2)*self.dt-self.varphi*(q_p**2 - q**2)
 
         return S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO
+
+
+#TODO: add experience replay buffer
