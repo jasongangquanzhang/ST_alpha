@@ -106,10 +106,10 @@ class ST_alpha_DDQN:
 
         # Q - function approximation
         #
-        # features = alpha, q
+        # features =t, alpha, q
         #
         self.Q_main = {
-            "net": DQN(n_in=2, n_out=4, nNodes=self.n_nodes, nLayers=self.n_layers)
+            "net": DQN(n_in=3, n_out=4, nNodes=self.n_nodes, nLayers=self.n_layers)
         }
 
         self.Q_main["optimizer"], self.Q_main["scheduler"] = self.__get_optim_sched__(
@@ -123,17 +123,17 @@ class ST_alpha_DDQN:
         optimizer = optim.AdamW(net["net"].parameters(), lr=self.lr)
 
         scheduler = optim.lr_scheduler.StepLR(
-            optimizer, step_size=self.sched_step_size, gamma=0.99
+            optimizer, step_size=self.sched_step_size, gamma=self.gamma
         )
 
         return optimizer, scheduler
 
-    def __stack_state__(self, t_Ndt, S, X, alpha, q):
+    def __stack_state__(self, t, S, X, alpha, q):
         """
         Stack the state variables into a single tensor.
 
         Args:
-            t_Ndt (torch.Tensor): Time variable.
+            t (torch.Tensor): Time variable.
             S (torch.Tensor): Price variable.
             X (torch.Tensor): Cash variable.
             alpha (torch.Tensor): Alpha variable.
@@ -144,7 +144,7 @@ class ST_alpha_DDQN:
         """
         return torch.cat(
             (
-                # t_Ndt.unsqueeze(-1),
+                t.unsqueeze(-1) / self.env.Ndt,
                 # S.unsqueeze(-1) / self.env.S_0 - 1.0,
                 alpha.unsqueeze(-1)/0.02,
                 # X.unsqueeze(-1), #TODO：try normalize in network
@@ -162,22 +162,22 @@ class ST_alpha_DDQN:
             tuple: A tuple containing the time, state, cash, alpha, and inventory tensors.
         """
         # t is relative time from end
-        t = torch.randint(0, self.env.Ndt, (mini_batch_size,)) / self.env.Ndt
+        t = torch.randint(0, self.env.Ndt, (mini_batch_size,))
         # t[-int(mini_batch_size*0.05):] = self.env.N
 
-        S, q, X, alpha = self.env.Randomize_Start(mini_batch_size)
+        S, q, X, alpha = self.env.Randomize_Start(t, mini_batch_size)
         # TODO: plot these to check these
         return t, S, q, X, alpha
 
     def update_Q(self, n_iter=10, mini_batch_size=256, epsilon=0.02):# TODO: make it time update not random
         for i in range(n_iter):
 
-            t_Ndt, S, q, X, alpha = self.__grab_mini_batch__(mini_batch_size)
+            t, S, q, X, alpha = self.__grab_mini_batch__(mini_batch_size)
 
             self.Q_main["optimizer"].zero_grad()
 
             # concatenate states
-            state = self.__stack_state__(t_Ndt=t_Ndt, S=S, q=q, X=X, alpha=alpha)
+            state = self.__stack_state__(t=t, S=S, q=q, X=X, alpha=alpha)
 
             Q = self.Q_main["net"](state)  # (batch_size, n_actions)
 
@@ -193,12 +193,12 @@ class ST_alpha_DDQN:
             Q_value = Q.gather(1, actions.unsqueeze(1)).squeeze(1)
 
             # Step in environment to get next state and reward
-            S_p, X_p, alpha_p, q_p, r, isMO, buySellMO = self.env.step(
-                0, S, X, alpha, q, actions
+            t_p, S_p, X_p, alpha_p, q_p, r, isMO, buySellMO = self.env.step(
+                t, S, X, alpha, q, actions
             )
             # New state
             state_p = self.__stack_state__(
-                t_Ndt=t_Ndt, S=S_p, X=X_p, alpha=alpha_p, q=q_p
+                t=t_p, S=S_p, X=X_p, alpha=alpha_p, q=q_p
             )
             Q_p = self.Q_main["net"](state_p)
             # Next greedy action for Double DQN
@@ -258,7 +258,7 @@ class ST_alpha_DDQN:
 
                 self.loss_plots()
                 self.run_strategy(
-                    1_000, name=datetime.now().strftime("%H_%M_%S"), N=100
+                    1_000, name=datetime.now().strftime("%H_%M_%S")
                 )
                 self.plot_policy()
                 # self.plot_policy(name=datetime.now().strftime("%H_%M_%S"))
@@ -318,7 +318,7 @@ class ST_alpha_DDQN:
 
         if N is None:
             N = self.env.Ndt  # number of time steps
-
+        time = torch.zeros((nsims, N + 1)).float()
         S = torch.zeros((nsims, N + 1)).float()
         q = torch.zeros((nsims, N + 1)).float()
         X = torch.zeros((nsims, N + 1)).float()
@@ -329,27 +329,27 @@ class ST_alpha_DDQN:
         isMO = torch.zeros((nsims, N)).float()
         buySellMO = torch.zeros((nsims, N)).float()
 
-        S[:, 0], q[:, 0], X[:, 0], alpha[:, 0] = self.env.Randomize_Start(
+        S[:, 0], q[:, 0], X[:, 0], alpha[:, 0] = self.env.Zero_Start(
             mini_batch_size=nsims
         )
 
         ones = torch.ones(nsims)
 
-        for t in range(N):
-            t_Ndt = torch.full((nsims,), t / N)
-            state = self.__stack_state__(t_Ndt, S[:, t], q[:, t], X[:, t], alpha[:, t])
+        for step in range(N):
+
+            state = self.__stack_state__(t=time[:, step], S=S[:, step], q=q[:, step], X=X[:, step], alpha=alpha[:, step])
             Q = self.Q_main["net"](state)
-            action[:, t] = Q.argmax(dim=1)
-            (
-                S[:, t + 1],
-                X[:, t + 1],
-                alpha[:, t + 1],
-                q[:, t + 1],
-                r[:, t],
-                isMO[:, t],
-                buySellMO[:, t],
+            action[:, step] = Q.argmax(dim=1)
+            (   time[:, step + 1],
+                S[:, step + 1],
+                X[:, step + 1],
+                alpha[:, step + 1],
+                q[:, step + 1],
+                r[:, step],
+                isMO[:, step],
+                buySellMO[:, step],
             ) = self.env.step(
-                t_Ndt, S[:, t], X[:, t], alpha[:, t], q[:, t], action[:, t]
+                time[:, step], S[:, step], X[:, step], alpha[:, step], q[:, step], action[:, step]
             )
 
 
@@ -363,6 +363,7 @@ class ST_alpha_DDQN:
         q[:, q.shape[1] - 1] = 0
 
         # extract everything
+        time = time.detach().numpy()
         S = S.detach().numpy()
         X = X.detach().numpy()
         alpha = alpha.detach().numpy()
@@ -438,7 +439,7 @@ class ST_alpha_DDQN:
         """Plots the policy as a single heatmap showing the action with the highest probability."""
         num_alpha_points = 51
         num_inventory_points = 51
-        alpha_values = torch.linspace(-0.02, 0.02, num_alpha_points)
+        alpha_values = torch.linspace(-0.2, 0.2, num_alpha_points)
         inventory_levels = torch.linspace(-self.Nq, self.Nq, num_inventory_points)
 
         max_prob_action = np.zeros((num_inventory_points, num_alpha_points))
@@ -447,7 +448,7 @@ class ST_alpha_DDQN:
             for i, q in enumerate(inventory_levels):
                 for j, alpha in enumerate(alpha_values):
                     state = self.__stack_state__(
-                        t_Ndt=0.5 * torch.ones(1),
+                        t=0.5 * torch.ones(1),
                         S=self.env.S_0 * torch.ones(1),
                         X=torch.zeros(1),
                         alpha=torch.tensor([alpha]),

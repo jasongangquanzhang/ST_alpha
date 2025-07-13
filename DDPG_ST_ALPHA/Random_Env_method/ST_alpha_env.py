@@ -27,6 +27,7 @@ class ST_alpha_env:
         T=60,
         POV=0.2,
         Nq=20,
+        gamma = 0.9998,
         S_0=1300,
         X_0=0,
         q_0=0,
@@ -44,6 +45,7 @@ class ST_alpha_env:
         self.q_0 = q_0
         self.POV = POV
         self.Nq = Nq
+        self.gamma = gamma
         self.Delta = Delta
         self.varphi = varphi
         self.phi = phi
@@ -59,11 +61,22 @@ class ST_alpha_env:
     def lognormal(self, sigma, mini_batch_size=10):
         return torch.exp(-0.5 * sigma**2 + sigma * torch.randn(mini_batch_size))
 
-    def Randomize_Start(self, mini_batch_size=10):# TODO in each time of the training, all things should be randomized
-        S0 = self.S_0 + self.sigma * torch.randn(mini_batch_size)
+    def Randomize_Start(
+        self, t, mini_batch_size=10
+    ):  # TODO in each time of the training, all things should be randomized
+        S0 = self.S_0 + self.sigma * torch.sqrt(t * self.dt) * torch.randn(
+            mini_batch_size
+        )
         q0 = torch.randint(low=-20, high=20, size=(mini_batch_size,))
         X0 = torch.zeros(mini_batch_size)
-        alpha0 = (torch.rand(mini_batch_size) - 0.5) * 0.04  # Uniform in [-0.02, 0.02]
+        alpha0 = (torch.rand(mini_batch_size) - 0.5) * 0.4  # Uniform in [-0.2, 0.2]
+        return S0, q0, X0, alpha0
+
+    def Zero_Start(self, mini_batch_size=10):
+        S0 = torch.zeros(mini_batch_size) + self.S_0
+        q0 = torch.zeros(mini_batch_size)
+        X0 = torch.zeros(mini_batch_size)
+        alpha0 = torch.zeros(mini_batch_size)
         return S0, q0, X0, alpha0
 
     def Simulate(self, mini_batch_size=10):
@@ -103,7 +116,7 @@ class ST_alpha_env:
 
     def step(
         self,
-        t_Ndt,
+        t,
         S: torch.Tensor,
         X: torch.Tensor,
         alpha: torch.Tensor,
@@ -143,17 +156,24 @@ class ST_alpha_env:
             - 1
         )  # -1 for sell, 1 for buy
         # Price state
-        S_p = S + (self.nu + alpha) * self.dt + self.sigma * torch.sqrt(torch.tensor(self.dt)) * torch.randn(Nsims)
+        S_p = (
+            S
+            + (self.nu + alpha) * self.dt
+            + self.sigma * torch.sqrt(torch.tensor(self.dt)) * torch.randn(Nsims)
+        )
 
         # alpha state
         alpha_p = self.ShortTermalpha.get_next_alpha(alpha, isMO, buySellMO, self.dt)
         # time state
         # t_p = t + self.dt
         # Update Inventory
-        isfilled_p = ((action == 2) | (action == 3)).int() * isMO.int() * (buySellMO == 1).int()
-        isfilled_m = ((action == 1) | (action == 3)).int() * isMO.int() * (buySellMO == -1).int()
-
-
+        isfilled_p = (
+            ((action == 2) | (action == 3)).int() * isMO.int() * (buySellMO == 1).int()
+        )
+        isfilled_m = (
+            ((action == 1) | (action == 3)).int() * isMO.int() * (buySellMO == -1).int()
+        )
+        t_p = t + 1
         q_p = q + isfilled_m - isfilled_p
         # update cash
         X_p = (
@@ -168,9 +188,15 @@ class ST_alpha_env:
         # reward = (X_p - X) + (q_p - q) * liquidation_price
         # reward = (X_p - X) + (q_p - q) * S_p
         # reward = (X_p - X) + q_p * (S_p - 0.5 * self.Delta - self.varphi * q_p) - q * (S - 0.5 * self.Delta - self.varphi * q)
-        reward = (isfilled_p + isfilled_m) * 0.5 * self.Delta + q * (S_p - S) - self.phi*(q**2)*self.dt-self.varphi*(q_p**2 - q**2)
+        discount = self.gamma ** (self.Ndt - t.float())
+        reward = (
+            (isfilled_p + isfilled_m) * 0.5 * self.Delta
+            + q * (S_p - S)
+            - self.phi * (q**2) * self.dt
+            - discount * self.varphi * (q_p**2 - q**2)
+        )
 
-        return S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO
+        return t_p, S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO
 
 
-#TODO: add experience replay buffer
+# TODO: add experience replay buffer
