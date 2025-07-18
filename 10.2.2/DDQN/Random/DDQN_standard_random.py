@@ -1,6 +1,6 @@
 # Random Method
 
-from standard_env import StandardEnv
+from env_standard_random import StandardEnv
 
 import numpy as np
 
@@ -363,7 +363,7 @@ class DDQNAgent:
         axs[2].grid(True)
 
         plt.tight_layout()
-        plt.savefig("loss_and_lr.png")
+        # plt.savefig("loss_and_lr.png")
         plt.show()
 
         # Plot the policy heatmap and simulation results
