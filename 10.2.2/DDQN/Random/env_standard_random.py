@@ -14,6 +14,7 @@ class StandardEnv:
         phi = 0.01,                     # Running penalty
         varphi = 0.01,                  # Liquidation penalty TODO: experiment
         sigma = 0.001,                  # Price volatility
+        gamma = 0.99,                   # Discount factor
         S_0 = 20,                       # Initial midprice
         X_0 = 0,                        # Initial cash
         q_0 = 0,                        # Initial inventory
@@ -30,8 +31,8 @@ class StandardEnv:
         self.phi = phi
         self.varphi = varphi
         self.sigma = sigma
+        self.gamma = gamma
 
-        # TODO is this needed?
         self.S_0 = S_0
         self.X_0 = X_0
         self.q_0 = q_0
@@ -41,7 +42,7 @@ class StandardEnv:
         S0 = self.S_0 + self.sigma * torch.randn(mini_batch_size)   # Initial midprice with noise
         q0 = torch.randint(-self.I_max, self.I_max + 1, size=(mini_batch_size,)).float()  # Random inventory
         X0 = torch.zeros(mini_batch_size)  # Initial cash
-        return  S0, q0, X0 # TODO check if this is correct, need to include t?
+        return  S0, q0, X0
     
     def step(self, t, S, X, q, action):
         """Advance the environment by one step given the current action.
@@ -59,7 +60,7 @@ class StandardEnv:
         """
         mini_batch_size = S.shape[0]
 
-        # Simulate arriving MOs TODO check if only either buy or sell MO arrives
+        # Simulate arriving MOs
         lambda_total = self.lambda_p + self.lambda_m
         isMO = torch.rand(mini_batch_size) < (
             1 - torch.exp(torch.tensor(-self.dt * (lambda_total)))
@@ -88,10 +89,14 @@ class StandardEnv:
         # Inventory update
         q_p = q + isfilled_m - isfilled_p
 
-        # Reward calculationo
-        reward = (isfilled_p + isfilled_m) * self.Delta * 0.5 \
-            + q * (S_p - S) \
-            - self.phi * (q**2) * self.dt \
-            - self.varphi * (q_p**2 - q**2)
+        # Reward calculation
+        # Earning spread + change in position + running penalty + liquidation penalty
+        discount = self.gamma ** ((self.T - t)/self.dt)
+        reward = (
+            (isfilled_p + isfilled_m) * self.Delta * 0.5            # Earning spread
+            + q * (S_p - S)                                         # Change in position    
+            - self.phi * (q**2) * self.dt                           # Running penalty
+            - discount * self.varphi * (q_p**2 - q**2)              # Liquidation penalty
+        )
         
         return t_p, S_p, X_p, q_p, reward, isMO, buySellMO
