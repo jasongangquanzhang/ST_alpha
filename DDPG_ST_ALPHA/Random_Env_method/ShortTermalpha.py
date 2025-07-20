@@ -9,6 +9,9 @@ class ShortTermalpha:
         self.eta = eta
         self.dalpha = None
         self.value = None
+    
+    def __str__(self):
+        return f"ShortTermalpha(zeta={self.zeta}, epsilon={self.epsilon}, eta={self.eta})"
 
     def generate_dalpha(self, dt, lambda_p, lambda_m):
         self.dalpha = math.sqrt(

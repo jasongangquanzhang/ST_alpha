@@ -16,6 +16,8 @@ import torch.nn as nn
 
 from tqdm import tqdm
 
+from mpl_toolkits.mplot3d import Axes3D
+
 import copy
 
 import pdb
@@ -102,6 +104,9 @@ class ST_alpha_DDQN:
 
         self.tau = tau
 
+    def __str__(self):
+        return f"ST_alpha_DDQN(gamma={self.gamma}, n_nodes={self.n_nodes}, n_layers={self.n_layers}, lr={self.lr}, sched_step_size={self.sched_step_size}, tau={self.tau})"
+
     def __initialize_NNs__(self):
 
         # Q - function approximation
@@ -146,7 +151,7 @@ class ST_alpha_DDQN:
             (
                 t.unsqueeze(-1) / self.env.Ndt,
                 # S.unsqueeze(-1) / self.env.S_0 - 1.0,
-                alpha.unsqueeze(-1)/0.02,
+                alpha.unsqueeze(-1) / 0.02,
                 # X.unsqueeze(-1), #TODO：try normalize in network
                 q.unsqueeze(-1) / self.Nq,
             ),
@@ -169,7 +174,9 @@ class ST_alpha_DDQN:
         # TODO: plot these to check these
         return t, S, q, X, alpha
 
-    def update_Q(self, n_iter=10, mini_batch_size=256, epsilon=0.02):# TODO: make it time update not random
+    def update_Q(
+        self, n_iter=10, mini_batch_size=256, epsilon=0.02
+    ):  # TODO: make it time update not random
         for i in range(n_iter):
 
             t, S, q, X, alpha = self.__grab_mini_batch__(mini_batch_size)
@@ -197,9 +204,7 @@ class ST_alpha_DDQN:
                 t, S, X, alpha, q, actions
             )
             # New state
-            state_p = self.__stack_state__(
-                t=t_p, S=S_p, X=X_p, alpha=alpha_p, q=q_p
-            )
+            state_p = self.__stack_state__(t=t_p, S=S_p, X=X_p, alpha=alpha_p, q=q_p)
             Q_p = self.Q_main["net"](state_p)
             # Next greedy action for Double DQN
             next_greedy_actions = Q_p.argmax(dim=1, keepdim=True)
@@ -257,9 +262,7 @@ class ST_alpha_DDQN:
             if np.mod(i + 1, n_plot) == 0:
 
                 self.loss_plots()
-                self.run_strategy(
-                    1_000, name=datetime.now().strftime("%H_%M_%S")
-                )
+                self.run_strategy(1_000, name=datetime.now().strftime("%H_%M_%S"))
                 self.plot_policy()
                 # self.plot_policy(name=datetime.now().strftime("%H_%M_%S"))
 
@@ -337,10 +340,17 @@ class ST_alpha_DDQN:
 
         for step in range(N):
 
-            state = self.__stack_state__(t=time[:, step], S=S[:, step], q=q[:, step], X=X[:, step], alpha=alpha[:, step])
+            state = self.__stack_state__(
+                t=time[:, step],
+                S=S[:, step],
+                q=q[:, step],
+                X=X[:, step],
+                alpha=alpha[:, step],
+            )
             Q = self.Q_main["net"](state)
             action[:, step] = Q.argmax(dim=1)
-            (   time[:, step + 1],
+            (
+                time[:, step + 1],
                 S[:, step + 1],
                 X[:, step + 1],
                 alpha[:, step + 1],
@@ -349,9 +359,13 @@ class ST_alpha_DDQN:
                 isMO[:, step],
                 buySellMO[:, step],
             ) = self.env.step(
-                time[:, step], S[:, step], X[:, step], alpha[:, step], q[:, step], action[:, step]
+                time[:, step],
+                S[:, step],
+                X[:, step],
+                alpha[:, step],
+                q[:, step],
+                action[:, step],
             )
-
 
         # Clear position at the end of the simulation
         X[:, X.shape[1] - 1] += np.multiply(
@@ -394,7 +408,7 @@ class ST_alpha_DDQN:
             # plt.xticks([0,0.5,1])
             plt.title(title)
             plt.xlabel(r"$t$")
-
+        plt.suptitle(f"Simulation - {self}  \n  {self.env} \n {self.env.ShortTermalpha}", fontsize=12, y=1.02)
         plot(t, (S), 1, r"$S_t$")
         plot(t, alpha, 2, r"$\alpha_t$")
         # plot(t[1:], q[:, 1:] - q[:, :-1], 2, r"$q_t - q_{t-1}$")
@@ -434,12 +448,11 @@ class ST_alpha_DDQN:
 
         pass
 
-
-    def plot_policy(self, name=""):
+    def plot_policy(self, t=0.5, name=""):
         """Plots the policy as a single heatmap showing the action with the highest probability."""
         num_alpha_points = 51
         num_inventory_points = 51
-        alpha_values = torch.linspace(-0.2, 0.2, num_alpha_points)
+        alpha_values = torch.linspace(-0.02, 0.02, num_alpha_points)
         inventory_levels = torch.linspace(-self.Nq, self.Nq, num_inventory_points)
 
         max_prob_action = np.zeros((num_inventory_points, num_alpha_points))
@@ -448,16 +461,21 @@ class ST_alpha_DDQN:
             for i, q in enumerate(inventory_levels):
                 for j, alpha in enumerate(alpha_values):
                     state = self.__stack_state__(
-                        t=0.5 * torch.ones(1),
+                        t=t * torch.ones(1),
                         S=self.env.S_0 * torch.ones(1),
                         X=torch.zeros(1),
                         alpha=torch.tensor([alpha]),
                         q=torch.tensor([q]),
                     )
-                    policy_output = self.Q_main["net"](state).argmax(dim=1, keepdim=False).squeeze().numpy()
+                    policy_output = (
+                        self.Q_main["net"](state)
+                        .argmax(dim=1, keepdim=False)
+                        .squeeze()
+                        .numpy()
+                    )
                     max_prob_action[i, j] = policy_output
                     max_prob_value[i, j] = np.max(policy_output)
-
+        
         plt.figure(figsize=(10, 8))
         plt.contourf(
             alpha_values.numpy(),
@@ -470,9 +488,56 @@ class ST_alpha_DDQN:
         plt.colorbar(ticks=range(4), label="Action")
         plt.axhline(0, linestyle="--", color="k", linewidth=0.8)
         plt.axvline(0, linestyle="--", color="k", linewidth=0.8)
+        plt.suptitle(f"Policy - {self}  \n  {self.env} \n {self.env.ShortTermalpha}", fontsize=12, y=1.02)
         plt.title("Policy Heatmap - Action", fontsize=16)
         plt.xlabel(r"$\alpha$", fontsize=14)
         plt.ylabel("Inventory", fontsize=14)
         plt.tight_layout()
         plt.show()
 
+
+    def plot_policy_3d_bars(self, name="Sell Side Posts"):
+        num_alpha_points = 25
+        num_inventory_points = 25
+        num_time_points = 20
+
+        alpha_values = torch.linspace(-0.02, 0.02, num_alpha_points)
+        inventory_levels = torch.linspace(-self.Nq, self.Nq, num_inventory_points)
+        time_values = torch.linspace(0, 60, num_time_points)  # match your episode time
+
+        alphas, times, inventories = [], [], []
+        actions = []
+
+        with torch.no_grad():
+            for i, alpha in enumerate(alpha_values):
+                for j, t in enumerate(time_values):
+                    for k, q in enumerate(inventory_levels):
+                        state = self.__stack_state__(
+                            t=torch.tensor([t]),
+                            S=self.env.S_0 * torch.ones(1),
+                            X=torch.zeros(1),
+                            alpha=torch.tensor([alpha]),
+                            q=torch.tensor([q]),
+                        )
+                        action = self.pi_main["net"](state).argmax(dim=1).item()
+                        alphas.append(alpha.item())
+                        times.append(t.item())
+                        inventories.append(q.item())
+                        actions.append(action)
+
+        fig = plt.figure(figsize=(6, 5))
+        ax = fig.add_subplot(111, projection='3d')
+
+        # Normalize action for color map
+        colors = plt.cm.jet(np.array(actions) / max(actions))
+
+        # Plot using scatter or bars
+        ax.scatter(alphas, times, inventories, c=colors, marker='s', s=15, alpha=0.9)
+
+        ax.set_title(name, fontsize=14)
+        ax.set_xlabel(r"$\alpha$")
+        ax.set_ylabel("t")
+        ax.set_zlabel("Inventory")
+
+        plt.tight_layout()
+        plt.show()

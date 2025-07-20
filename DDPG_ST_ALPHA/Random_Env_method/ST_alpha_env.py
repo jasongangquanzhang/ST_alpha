@@ -58,6 +58,9 @@ class ST_alpha_env:
         self.T = T  # total time
         self.dt = T / self.Ndt
 
+    def __str__(self):
+        return f"ST_alpha_env(T={self.T},gamma={self.gamma},lambda={self.lambda_p},S_0={self.S_0}, X_0={self.X_0}, q_0={self.q_0}, nu={self.nu}, Delta={self.Delta}, varphi={self.varphi}, phi={self.phi}, sigma={self.sigma}, Ndt={self.Ndt})"
+
     def lognormal(self, sigma, mini_batch_size=10):
         return torch.exp(-0.5 * sigma**2 + sigma * torch.randn(mini_batch_size))
 
@@ -69,7 +72,7 @@ class ST_alpha_env:
         )
         q0 = torch.randint(low=-20, high=20, size=(mini_batch_size,))
         X0 = torch.zeros(mini_batch_size)
-        alpha0 = (torch.rand(mini_batch_size) - 0.5) * 0.4  # Uniform in [-0.2, 0.2]
+        alpha0 = (torch.rand(mini_batch_size) - 0.5) * 0.04  # Uniform in [-0.02, 0.02]
         return S0, q0, X0, alpha0
 
     def Zero_Start(self, mini_batch_size=10):
