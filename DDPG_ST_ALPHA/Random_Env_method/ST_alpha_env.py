@@ -72,7 +72,13 @@ class ST_alpha_env:
         )
         q0 = torch.randint(low=-20, high=20, size=(mini_batch_size,))
         X0 = torch.zeros(mini_batch_size)
-        alpha0 = (torch.rand(mini_batch_size) - 0.5) * 0.04  # Uniform in [-0.02, 0.02]
+        decay = torch.exp(-2 * self.ShortTermalpha.zeta * t * self.dt)
+        std_alpha = self.ShortTermalpha.eta * torch.sqrt((1 - decay) / (2 * self.ShortTermalpha.zeta))
+
+        # Sample alpha0 from N(0, std_alpha^2)
+        alpha0 = std_alpha * torch.randn(mini_batch_size)
+        alpha0 = (torch.rand(mini_batch_size) - 0.5) * 0.04 # Uniform in [-0.02, 0.02]
+
         return S0, q0, X0, alpha0
 
     def Zero_Start(self, mini_batch_size=10):
@@ -153,6 +159,7 @@ class ST_alpha_env:
         isMO = torch.rand(Nsims) < (
             1 - torch.exp(torch.tensor(-self.dt * (self.lambda_p + self.lambda_m)))
         )
+        # isMO = torch.ones(Nsims).bool()  
 
         buySellMO = (
             2 * (torch.rand(Nsims) < self.lambda_p / (self.lambda_p + self.lambda_m))
