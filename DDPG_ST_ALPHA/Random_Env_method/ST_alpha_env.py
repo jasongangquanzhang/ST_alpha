@@ -203,7 +203,7 @@ class ST_alpha_env:
             (isfilled_p + isfilled_m) * 0.5 * self.Delta
             + q * (S_p - S)
             - self.phi * (q**2) * self.dt
-            - discount * self.varphi * (q_p**2 - q**2)
+            - self.varphi * (q_p**2 - q**2)
         )
 
         return t_p, S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO

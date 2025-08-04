@@ -183,7 +183,7 @@ class ST_alpha_DDQN:
     ):  # TODO: make it time update not random
         for i in range(n_iter):
 
-            t, S, q, X, alpha = self.__grab_mini_batch__(mini_batch_size)
+            t, S, q, X, alpha = self.__grab_mini_batch__(mini_batch_size) # should oversample t=9 but with decay
 
             self.Q_main["optimizer"].zero_grad()
 
@@ -215,10 +215,10 @@ class ST_alpha_DDQN:
             # Target value using target net
             target_q_values = (
                 self.Q_target["net"](state_p).gather(1, next_greedy_actions).squeeze(1)
-            )
+            ) * (t_p != self.env.Ndt)  #TODO: modify this to indicator one last step
 
             # Compute target
-            target = r + self.gamma * target_q_values
+            target = r + self.env.gamma * target_q_values
             target = target.detach()
 
             # Loss
@@ -433,6 +433,9 @@ class ST_alpha_DDQN:
 
         plt.subplot(2, 3, 6)
         plt.hist(X[:, -1], bins=51)
+        plt.title("Terminal Wealth")
+        plt.xlabel("Wealth")
+        plt.ylabel("Frequency")
 
         plt.tight_layout()
 

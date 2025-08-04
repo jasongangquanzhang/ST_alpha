@@ -29,7 +29,7 @@ class ANN(nn.Module):
         nLayers,
         activation="relu",
         out_activation=None,
-        temperature=30,
+        temperature=1,
         scale=1,
     ):
         super(ANN, self).__init__()
@@ -86,10 +86,12 @@ class DPGAgent:
         env: Environment,
         n_nodes=36,
         n_layers=6,
-        gamma = 0.99,
-        lr=1e-3,
+        gamma=0.99,
+        lr_q=1e-3,
+        lr_p=1e-3,
         sched_step_size=100,
         tau=0.01,
+        exploration_p=0.02,
         name="",
     ):
 
@@ -99,8 +101,10 @@ class DPGAgent:
         self.n_layers = n_layers
         self.name = name
         self.sched_step_size = sched_step_size
-        self.lr = lr
+        self.lr_q = lr_q
+        self.lr_p = lr_p
         self.Nq = env.Nq
+        self.exploration_p = exploration_p
 
         self.__initialize_NNs__()
 
@@ -112,8 +116,12 @@ class DPGAgent:
 
         self.Q_loss = []
         self.pi_loss = []
+        self.Q_value = []
 
         self.tau = tau
+
+    def __str__(self):
+        return f"DPGAgent(n_nodes={self.n_nodes}, n_layers={self.n_layers}, gamma={self.gamma}, lr_q={self.lr_q}, lr_p={self.lr_p}, exploration_p={self.exploration_p}, sched_step_size={self.sched_step_size}, tau={self.tau})"
 
     def __initialize_NNs__(self):
 
@@ -123,7 +131,7 @@ class DPGAgent:
         #
         self.pi_main = {
             "net": ANN(
-                n_in=3,
+                n_in=2,
                 n_out=4,
                 nNodes=self.n_nodes,
                 nLayers=self.n_layers,
@@ -133,7 +141,7 @@ class DPGAgent:
         }
 
         self.pi_main["optimizer"], self.pi_main["scheduler"] = self.__get_optim_sched__(
-            self.pi_main
+            self.pi_main, lr=self.lr_p
         )
 
         self.pi_target = copy.deepcopy(self.pi_main)
@@ -143,21 +151,21 @@ class DPGAgent:
         # features = t,S, q, action
         #
         self.Q_main = {
-            "net": ANN(n_in=4, n_out=1, nNodes=self.n_nodes, nLayers=self.n_layers)
+            "net": ANN(n_in=6, n_out=1, nNodes=self.n_nodes, nLayers=self.n_layers)
         }
 
         self.Q_main["optimizer"], self.Q_main["scheduler"] = self.__get_optim_sched__(
-            self.Q_main
+            self.Q_main, lr=self.lr_q
         )
 
         self.Q_target = copy.deepcopy(self.Q_main)
 
-    def __get_optim_sched__(self, net):
+    def __get_optim_sched__(self, net, lr):
 
-        optimizer = optim.AdamW(net["net"].parameters(), lr=self.lr)
+        optimizer = optim.AdamW(net["net"].parameters(), lr=lr)
 
         scheduler = optim.lr_scheduler.StepLR(
-            optimizer, step_size=self.sched_step_size, gamma=0.99
+            optimizer, step_size=self.sched_step_size, gamma=self.gamma
         )
 
         return optimizer, scheduler
@@ -179,7 +187,7 @@ class DPGAgent:
         return torch.cat(
             (
                 t.unsqueeze(-1) / self.env.Ndt,
-                (S.unsqueeze(-1) - self.env.S_0) / self.env.sigma,
+                # (S.unsqueeze(-1) - self.env.S_0) / self.env.S_0,
                 # X.unsqueeze(-1),
                 q.unsqueeze(-1) / self.Nq,
             ),
@@ -206,7 +214,7 @@ class DPGAgent:
 
         for i in range(n_iter):
 
-            t, S, q, X= self.__grab_mini_batch__(mini_batch_size)
+            t, S, q, X = self.__grab_mini_batch__(mini_batch_size)
 
             self.Q_main["optimizer"].zero_grad()
 
@@ -215,46 +223,58 @@ class DPGAgent:
 
             # compute the action
 
-            if np.random.rand() < epsilon:
-                # Random action (uniform exploration)
-                action = torch.randint(0, 4, (mini_batch_size,)).unsqueeze(1)
-            else:
-                # Sample from the policy's softmax output
-                
-                action = torch.multinomial(
-                    self.pi_main["net"](state).detach(), num_samples=1
-                )
+            # if np.random.rand() < epsilon:
+            #     # Random action (uniform exploration)
+            #     action = torch.randint(0, 4, (mini_batch_size,)).unsqueeze(1)
+            # else:
+            #     # Sample from the policy's softmax output
 
-            # compute the value of the action I_p given state X
-            Q = self.Q_main["net"](torch.cat((state, action), axis=1))
+            #     action = torch.multinomial(
+            #         self.pi_main["net"](state).detach(), num_samples=1
+            #     )
+            action = torch.multinomial(
+                self.pi_main["net"](state).detach(), num_samples=1
+            )
+            action_onehot = torch.nn.functional.one_hot(
+                action.squeeze(), num_classes=4
+            ).float()
+            Q = self.Q_main["net"](torch.cat((state, action_onehot), axis=1))
+            # # compute the value of the action I_p given state X
+            # Q = self.Q_main["net"](torch.cat((state, action), axis=1))
 
             # step in the environment get the next state and reward
-            t_p,S_p, X_p, q_p, r, isMO, buySellMO = self.env.step(
+            t_p, S_p, X_p, q_p, r, isMO, buySellMO = self.env.step(
                 t=t, S=S, X=X, q=q, action=action.squeeze(1)
             )
             # compute the Q(S', a*)
             # concatenate new state
-            state_p = self.__stack_state__(
-                t=t_p, S=S_p, q=q_p, X=X_p
-            )
+            state_p = self.__stack_state__(t=t_p, S=S_p, q=q_p, X=X_p)
 
             # optimal policy at t+1 get the next action action_p
-            if np.random.rand() < epsilon:
-                # Random action (uniform exploration)
-                action_p = torch.randint(0, 4, (mini_batch_size,)).unsqueeze(1)
-                # print("RANDOM ACTION:", action_p)
-            else:
-                # Sample from the policy's softmax output
-                action_p = torch.multinomial(
-                    self.pi_main["net"](state_p).detach(), num_samples=1
-                )
-                # print("POLICY ACTION:", action_p)
-
-            # compute the target for Q
-            
-            target = r.reshape(-1, 1).detach() + self.env.gamma * self.Q_target["net"](
-                torch.cat((state_p, action_p), axis=1)
+            # if np.random.rand() < epsilon:
+            #     # Random action (uniform exploration)
+            #     action_p = torch.randint(0, 4, (mini_batch_size,)).unsqueeze(1)
+            #     # print("RANDOM ACTION:", action_p)
+            # else:
+            #     # Sample from the policy's softmax output
+            #     action_p = torch.multinomial(
+            #         self.pi_main["net"](state_p).detach(), num_samples=1
+            #     )
+            #     # print("POLICY ACTION:", action_p)
+            action_p = torch.multinomial(
+                self.pi_main["net"](state_p).detach(), num_samples=1
             )
+            # compute the target for Q
+            action_p_onehot = torch.nn.functional.one_hot(
+                action_p.squeeze(), num_classes=4
+            ).float()
+
+            with torch.no_grad():
+                q_target = self.Q_target["net"](
+                    torch.cat((state_p, action_p_onehot), axis=1)
+                )
+
+            target = r.reshape(-1, 1) + self.env.gamma * q_target
 
             loss = torch.mean((target.detach() - Q) ** 2)
 
@@ -269,10 +289,15 @@ class DPGAgent:
 
             self.soft_update(self.Q_main["net"], self.Q_target["net"])
 
-    def update_pi(self, n_iter=1, mini_batch_size=256, epsilon=0.02):
-
+    def update_pi(
+        self,
+        n_iter=1,
+        mini_batch_size=256,
+        exploration_p=0.02
+    ):
+        
         for i in range(n_iter):
-
+            exploration_p = max(exploration_p * (0.99 ** (i/100)), 0.01)
             t, S, q, X = self.__grab_mini_batch__(mini_batch_size)
 
             self.pi_main["optimizer"].zero_grad()
@@ -280,13 +305,26 @@ class DPGAgent:
             # concatenate states
             state = self.__stack_state__(t=t, S=S, q=q, X=X)
             probs = self.pi_main["net"](state)
-            action = torch.multinomial(probs, num_samples=1)  # Sample action from the policy distribution
+            action = torch.multinomial(
+                probs, num_samples=1
+            )  # Sample action from the policy distribution
             log_probs = torch.log(probs + 1e-8)  # prevent log(0)
-            selected_log_probs = log_probs.gather(1, action) # NOTE: log prob so that it got updated
-            Q = self.Q_main["net"](torch.cat((state, action), axis=1))
-            # entropy = -torch.mean(action * torch.log(action + 1e-8))
-            # loss = -torch.mean(Q) + 0.01 * entropy
-            loss = -torch.mean(selected_log_probs * Q.detach())
+            selected_log_probs = log_probs.gather(
+                1, action
+            )  # NOTE: log prob so that it got updated
+            action_onehot = torch.nn.functional.one_hot(
+                action.squeeze(), num_classes=4
+            ).float()
+            Q = self.Q_main["net"](torch.cat((state, action_onehot), axis=1))
+            self.Q_value.append(Q.detach().cpu().numpy())
+            # Q = self.Q_main["net"](torch.cat((state, action), axis=1))
+            # entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1).mean()
+            entropy = -torch.sum(probs * torch.log(probs), dim=1).mean()
+            loss = (
+                -torch.mean(selected_log_probs * Q.detach())
+                - exploration_p * entropy
+            )
+            # loss = -torch.mean(selected_log_probs * Q.detach())
 
             loss.backward()
             self.pi_main["optimizer"].step()
@@ -329,15 +367,13 @@ class DPGAgent:
             )
 
             self.update_pi(
-                n_iter=n_iter_pi, mini_batch_size=mini_batch_size, epsilon=epsilon
+                n_iter=n_iter_pi, mini_batch_size=mini_batch_size, exploration_p=self.exploration_p
             )
 
             if np.mod(i + 1, n_plot) == 0:
 
                 self.loss_plots()
-                self.run_strategy(
-                    1_000, name=datetime.now().strftime("%H_%M_%S")
-                )
+                self.run_strategy(1_000, name=datetime.now().strftime("%H_%M_%S"))
                 self.plot_policy()
                 # self.plot_policy(name=datetime.now().strftime("%H_%M_%S"))
 
@@ -374,12 +410,14 @@ class DPGAgent:
             plt.ylabel("loss")
             plt.yscale("symlog")
 
-        fig = plt.figure(figsize=(8, 4))
-        plt.subplot(1, 2, 1)
+        fig = plt.figure(figsize=(10, 4))
+        plt.subplot(1, 3, 1)
         plot(self.Q_loss, r"$Q$", show_band=False)
 
-        plt.subplot(1, 2, 2)
+        plt.subplot(1, 3, 2)
         plot(self.pi_loss, r"$\pi$")
+        plt.subplot(1, 3, 3)
+        plot(self.Q_value, r"$Q_values$ pi")
 
         plt.tight_layout()
         plt.show()
@@ -409,7 +447,7 @@ class DPGAgent:
         isMO = torch.zeros((nsims, N)).float()
         buySellMO = torch.zeros((nsims, N)).float()
 
-        S[:, 0], q[:, 0], X[:, 0]= self.env.Zero_Start(nsims)
+        S[:, 0], q[:, 0], X[:, 0] = self.env.Zero_Start(nsims)
         ones = torch.ones(nsims)
 
         for step in range(N):  # t = 0->N-1
@@ -418,11 +456,13 @@ class DPGAgent:
                 t=time[:, step], S=S[:, step], X=X[:, step], q=q[:, step]
             )
             # compute the action
-            action[:, step] = torch.multinomial(
-                self.pi_main["net"](state), num_samples=1
-            ).squeeze(1)
+            with torch.no_grad():
+                action[:, step] = torch.multinomial(
+                    self.pi_main["net"](state).detach(), num_samples=1
+                ).squeeze(1)
 
-            (   time[:, step + 1],
+            (
+                time[:, step + 1],
                 S[:, step + 1],
                 X[:, step + 1],
                 q[:, step + 1],
@@ -440,7 +480,7 @@ class DPGAgent:
         X[:, X.shape[1] - 1] += np.multiply(
             S[:, S.shape[1] - 1]
             + (0.5 * self.env.Delta) * np.sign(q[:, q.shape[1] - 1])
-            - self.env.varphi * q[:, q.shape[1] - 1],
+            + self.env.varphi * q[:, q.shape[1] - 1],
             q[:, q.shape[1] - 1],
         )
         q[:, q.shape[1] - 1] = 0
@@ -480,14 +520,17 @@ class DPGAgent:
 
         plot(t, S, 1, r"$S_t$")
 
-        plot(t[1:], q[:, 1:] - q[:, :-1], 2, r"$q_t - q_{t-1}$")
-        plot(t, q, 3, r"$q_t$")
+        plot(t, q, 2, r"$q_t$")
 
-        plot(t[:-1], np.cumsum(r, axis=1), 4, r"$r_t$")
-        plot(t, X + S * q, 5, r"$Wealth$")
-
+        plot(t[:-1], np.cumsum(r, axis=1), 3, r"$r_t$")
+        plot(t, X + S * q, 4, r"$Wealth$")
+        # plt.suptitle("Simulation", fontsize=14, y=1.05)
+        plt.suptitle(f"Simulation - {self}  \n  {self.env}", fontsize=12, y=1.02)
         plt.subplot(2, 3, 6)
-        # plt.hist(np.sum(r, axis=1), bins=51)
+        plt.hist(X[:, -1], bins=51)
+        plt.title("Terminal Wealth")
+        plt.xlabel("Wealth")
+        plt.ylabel("Frequency")
 
         plt.tight_layout()
 
@@ -517,13 +560,14 @@ class DPGAgent:
 
         pass
 
-    def plot_policy(self, name=""):
+    def plot_policy(self, S=None, name=""):
         """Plots the policy as a single heatmap showing the action with the highest probability."""
         num_inventory_points = 51
         num_time_points = 51
         inventory_values = torch.linspace(-self.Nq, self.Nq, num_inventory_points)
         time_steps = torch.linspace(0, self.env.Ndt, num_time_points)
-
+        if S is None:
+            S = self.env.S_0 * torch.ones(1)
         max_prob_action = np.zeros((num_time_points, num_inventory_points))
         max_prob_value = np.zeros((num_time_points, num_inventory_points))
         with torch.no_grad():
@@ -531,7 +575,7 @@ class DPGAgent:
                 for j, t in enumerate(time_steps):
                     state = self.__stack_state__(
                         t=torch.tensor([t]),
-                        S=self.env.S_0 * torch.ones(1),
+                        S=S * torch.ones(1),
                         X=torch.zeros(1),
                         q=torch.tensor([q]),
                     )
@@ -552,6 +596,7 @@ class DPGAgent:
         plt.axhline(0, linestyle="--", color="k", linewidth=0.8)
         plt.axvline(0, linestyle="--", color="k", linewidth=0.8)
         plt.title("Policy Heatmap - Action with Max Probability", fontsize=16)
+        plt.suptitle(f"Policy Heatmap - {self}  \n  {self.env}", fontsize=12, y=1.02)
         plt.xlabel(r"$t$", fontsize=14)
         plt.ylabel("Inventory", fontsize=14)
         plt.tight_layout()
