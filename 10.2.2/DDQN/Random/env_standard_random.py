@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 
 # S_t = S_0 + \sigma * W_t
@@ -37,6 +38,28 @@ class StandardEnv:
         self.X_0 = X_0
         self.q_0 = q_0
     
+    def to_one_hot(self, action, num_actions):
+        """
+        Convert action(s) to one-hot tensor.
+        
+        Args:
+            action (int, Tensor): Single int, tensor of ints, or one-hot tensor.
+            num_actions (int): Total number of possible actions.
+        
+        Returns:
+            Tensor: One-hot encoded tensor of shape (batch_size, num_actions).
+        """
+        if isinstance(action, torch.Tensor) and action.ndim == 2:
+            return action.float()  # already one-hot
+
+        if isinstance(action, int):
+            action = torch.tensor([action], dtype=torch.long)
+
+        if isinstance(action, torch.Tensor) and action.ndim == 1:
+            return F.one_hot(action.long(), num_classes=num_actions).float()
+
+        raise ValueError("Unsupported action format. Must be int, 1D tensor of ints, or 2D one-hot tensor.")
+
     def Randomize_Start(self, mini_batch_size):
         """Randomize the initial state of the environment."""
         S0 = self.S_0 + self.sigma * torch.randn(mini_batch_size)   # Initial midprice with noise
@@ -44,7 +67,7 @@ class StandardEnv:
         X0 = torch.zeros(mini_batch_size)  # Initial cash
         return  S0, q0, X0
     
-    def step(self, t, S, X, q, action):
+    def step(self, t, S, X, q, action_onehot):
         """Advance the environment by one step given the current action.
         
         Args:
@@ -52,12 +75,14 @@ class StandardEnv:
             S (torch.Tensor): Current midprice of shape (batch_size,).
             X (torch.Tensor): Current cash of shape (batch_size,).
             q (torch.Tensor): Current inventory of shape (batch_size,).
-            action (torch.Tensor): Action taken in the current state of shape (batch_size,).
-                0: Do nothing
-                1: Buy 1 unit
-                2: Sell 1 unit
-                3: Buy and sell 1 unit
+            action_onehot (torch.Tensor): One-hot encoded action of shape (batch_size, action_size).
+                For each row:
+                - [1, 0, 0, 0] represents "do nothing"
+                - [0, 1, 0, 0] represents "buy 1 unit"
+                - [0, 0, 1, 0] represents "sell 1 unit"
+                - [0, 0, 0, 1] represents "buy and sell 1 unit"
         """
+        action = torch.argmax(action_onehot, dim=1)  # Convert one-hot to action indices
         mini_batch_size = S.shape[0]
 
         # Simulate arriving MOs
@@ -71,6 +96,7 @@ class StandardEnv:
 
         # Time update
         t_p = t + self.dt
+        done = t_p >= self.T  # Check if the episode is done
 
         # Price update
         # S_t = S_0 + \sigma * W_t
@@ -91,12 +117,16 @@ class StandardEnv:
 
         # Reward calculation
         # Earning spread + change in position + running penalty + liquidation penalty
-        discount = self.gamma ** ((self.T - t)/self.dt)
+        # discount = self.gamma ** ((self.T - t)/self.dt)
         reward = (
-            (isfilled_p + isfilled_m) * self.Delta * 0.5            # Earning spread
-            + q * (S_p - S)                                         # Change in position    
-            - self.phi * (q**2) * self.dt                           # Running penalty
-            - discount * self.varphi * (q_p**2 - q**2)              # Liquidation penalty
+            (isfilled_p + isfilled_m) * self.Delta * 0.5              # Earning spread
+            # + q * (S_p - S)                                         # Change in position    
+            - self.phi * (q**2) * self.dt                             # Running penalty
+            # - discount * self.varphi * (q_p**2 - q**2)              # Liquidation penalty
+            - self.varphi * (q_p**2 - q**2)                           # Liquidation penalty
         )
+
+        # for done in the next step, add another liquidation penalty
+        reward += - self.varphi * (q_p**2) * done.float()  # Liquidation penalty if done
         
-        return t_p, S_p, X_p, q_p, reward, isMO, buySellMO
+        return t_p, S_p, X_p, q_p, reward, done, isMO, buySellMO

@@ -62,7 +62,7 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
     
-    def push(self, state, action, reward, next_state):
+    def push(self, state, action, reward, next_state, done):
         """
         Store a new experience in the replay buffer. If the buffer is full, it will overwrite the oldest experience.
         Args:
@@ -72,15 +72,18 @@ class ReplayBuffer:
             next_state (torch.Tensor): Next state after taking the action, of shape (batch_size, state_size).
         """
         batch_size = state.shape[0]
+        action_size = action.shape[1]
         for i in range(batch_size):
             s = state[i]
-            a = action[i]
+            # a = F.one_hot(action[i], num_classes=action_size).float()
+            a = action[i].float()
             r = reward[i]
             ns = next_state[i]
+            d = done[i]
 
             if (len(self.buffer) < self.capacity):
                 self.buffer.append(None)
-            self.buffer[self.index] = (s, a, r, ns)
+            self.buffer[self.index] = (s, a, r, ns, d)
             self.index = (self.index + 1) % self.capacity
     
     def sample(self, batch_size):
@@ -91,24 +94,27 @@ class ReplayBuffer:
         Returns:
             tuple: A tuple containing:
                 - states (torch.Tensor): Batch of states of shape (batch_size, state_size).
-                - actions (torch.Tensor): Batch of actions of shape (batch_size,).
+                - actions (torch.Tensor): Batch of actions of shape (batch_size, action_size).
                 - rewards (torch.Tensor): Batch of rewards of shape (batch_size,).
                 - next_states (torch.Tensor): Batch of next states of shape (batch_size, state_size).
+                - dones (torch.Tensor): Batch of done flags of shape (batch_size,).
         """
         random_indices = np.random.choice(len(self.buffer), size=batch_size, replace=False)
-        states, actions, rewards, next_states = [], [], [], []
+        states, actions, rewards, next_states, dones = [], [], [], [], []
         for i in random_indices:
-            state, action, reward, next_state, = self.buffer[i]
+            state, action, reward, next_state, done = self.buffer[i]
             states.append(state)
             actions.append(action)
             rewards.append(reward)
             next_states.append(next_state)
+            dones.append(done)
 
         return (
             torch.stack(states),
-            torch.tensor(actions),
+            torch.stack(actions),
             torch.tensor(rewards),
-            torch.stack(next_states)
+            torch.stack(next_states),
+            torch.tensor(dones, dtype=torch.bool)
         )
 
 class DDQNAgent:
@@ -163,22 +169,24 @@ class DDQNAgent:
         self.count = 0  # Counter for the number of episodes
         self.lrs = []   # List to store learning rates for plotting
     
-    def step(self, state, action, reward, next_state):
+    def step(self, state, action, reward, next_state, done):
         """
         Store the experience in the replay buffer and perform a learning step periodically.
         Args:
             state (torch.Tensor): Current state of shape (batch_size, state_size).
-            action (int): Action taken in the current state.
-            reward (float): Reward received after taking the action.
+            action (torch.Tensor): Action taken in the current state, of shape (batch_size, action_size).
+            reward (torch.Tensor): Reward received after taking the action, of shape (batch_size,).
             next_state (torch.Tensor): Next state after taking the action, of shape (batch_size, state_size).
+            done (torch.Tensor): Flag indicating if the episode has ended, of shape (batch_size,).
         """
         # Store the experience in the replay buffer
-        self.replay_buffer.push(state, action, reward, next_state)
+        self.replay_buffer.push(state, action, reward, next_state, done)
 
         # Learn every `update_every` steps
         self.steps += 1
         if self.steps % self.update_every == 0:
-            if (len(self.replay_buffer) >= self.sample_size):
+            if (len(self.replay_buffer) >= 10 * self.sample_size):
+            # if (len(self.replay_buffer) >= self.replay_buffer.capacity * 0.5):
                 experiences = self.replay_buffer.sample(self.sample_size)
                 self.learn(experiences)
     
@@ -189,7 +197,8 @@ class DDQNAgent:
             state (torch.Tensor): Current state of shape (batch_size, state_size).
             epsilon (float): Epsilon value for the epsilon-greedy policy.
         Returns:
-            torch.Tensor: Selected action index (0: do nothing, 1: buy, 2: sell, 3: buy and sell).
+            torch.Tensor: One-hot encoded action tensor of shape (batch_size, action_size).
+                Index 0: Do nothing, 1: Buy, 2: Sell, 3: Buy and sell
         """
         # state = state.unsqueeze(0)
         self.qnetwork_main.eval()
@@ -199,9 +208,10 @@ class DDQNAgent:
 
         # Epsilon-greedy action selection
         if random.random() > epsilon:
-            return torch.argmax(action_values, dim=1)  # Greedy action
+            action = torch.argmax(action_values, dim=1)  # Greedy action
         else:
-            return torch.randint(0, self.action_size, (state.shape[0],))   # Random action
+            action = torch.randint(0, self.action_size, (state.shape[0],))   # Random action
+        return self.env.to_one_hot(action, self.action_size)  # Convert action indices to one-hot encoding
 
     def learn(self, experiences):
         """
@@ -209,19 +219,22 @@ class DDQNAgent:
         Args:
             experiences (tuple): A tuple containing:
                 - states (torch.Tensor): Batch of states of shape (batch_size, state_size).
-                - actions (torch.Tensor): Batch of actions of shape (batch_size,).
+                - actions (torch.Tensor): Batch of actions of shape (batch_size, action_size).
                 - rewards (torch.Tensor): Batch of rewards of shape (batch_size,).
                 - next_states (torch.Tensor): Batch of next states of shape (batch_size, state_size).
+                - dones (torch.Tensor): Batch of done flags of shape (batch_size,).
         """
-        states, actions, rewards, next_states = experiences
+        states, actions, rewards, next_states, dones = experiences
         
         # Get max predicted Q values for next states from the target network
         Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
+        Q_targets_next *= (~dones).float().unsqueeze(1)  # Zero out Q targets for done states
         # Compute Q targets for current states
         Q_target = rewards.unsqueeze(1) + self.env.gamma * Q_targets_next
 
         # Get expected Q values from the main network
-        Q_main = self.qnetwork_main(states).gather(1, actions.unsqueeze(1))
+        # Q_main = self.qnetwork_main(states).gather(1, actions.unsqueeze(1))
+        Q_main = (self.qnetwork_main(states) * actions).sum(dim=1, keepdim=True) # Compute Q values for the actions taken
 
         # Compute and minimize the loss
         loss = F.mse_loss(Q_main, Q_target)
@@ -243,22 +256,18 @@ class DDQNAgent:
         for target_param, main_param in zip(self.qnetwork_target.parameters(), self.qnetwork_main.parameters()):
             target_param.data.copy_(self.tau * main_param.data + (1.0 - self.tau) * target_param.data)
     
-    def __stack_state__(self, t, S, X, q, dim):
+    def __stack_state__(self, t, q, dim):
         """
         Stack the state components into a single tensor.
         Args:
-            t (float): Current time.
-            X (float): Current cash.
-            S (float): Current midprice.
-            q (float): Current inventory.
+            t (torch.Tensor): Current time of shape (batch_size,).
+            q (torch.Tensor): Current inventory of shape (batch_size,).
             dim (int): Dimension along which to stack the state components.
         Returns:
-            torch.Tensor: Stacked state tensor of shape (batch_size, state_size).
-        """
+            torch.Tensor: Stacked state tensor of shape (batch_size, state_size), if using dim=1.
+        """ 
         return torch.stack((
             t / self.env.T,                     # Normalize time to [0, 1]
-            S / self.env.S_0 - 1.0,             # Relative price change
-            X / (self.env.S_0 * self.env.I_max),# Normalize cash to [-1, 1]
             q / self.env.I_max                  # Normalize inventory to [-1, 1]
         ), dim=dim)
 
@@ -266,7 +275,7 @@ class DDQNAgent:
         """
         Args:
             n_iter (int): Number of iterations to train the agent.
-            n_plot (int): Number of iterations after which to plot the results.
+            n_plot (int): Number of iterations to plot the result once.
             eps_start (float): Initial epsilon value for the epsilon-greedy policy.
             eps_end (float): Final epsilon value for the epsilon-greedy policy.
             eps_decay (float): Decay factor for epsilon.
@@ -285,6 +294,18 @@ class DDQNAgent:
             # Randomize t between 0 and T, S between S_0 and S_0 + sigma, X = 0, q between -I_max and I_max
             k = int(np.ceil(self.env.T / self.env.dt))
             t = torch.randint(0, k, size=(batch_size,)).float() * self.env.dt
+
+            # # Randomize t between 0 and T (oversampling the last time step before terminal)
+            # k = int(np.ceil(self.env.T / self.env.dt))
+            # t_last = (k - 1) * self.env.dt
+            # oversample_pct = max(0.1 * (1 - i/n_iter), 0.01) # decay from 10% to 1%
+            # num_terminal = int(batch_size * oversample_pct)
+            # num_random = batch_size - num_terminal
+            # t_last_tensor = torch.full((num_terminal,), t_last)
+            # t_random = torch.randint(0, k, size=(num_random,)).float() * self.env.dt # don't take the terminal time
+            # t = torch.cat((t_last_tensor, t_random))
+
+
             # Randomize S = S_0 + sigma * W_t
             W_t = torch.sqrt(t) * torch.randn(batch_size)
             S = self.env.S_0 + self.env.sigma * W_t
@@ -298,16 +319,16 @@ class DDQNAgent:
             # t = torch.zeros(batch_size)
             # S, q, X = self.env.Randomize_Start(batch_size)
 
-            state = self.__stack_state__(t, S, X, q, dim=1)
+            state = self.__stack_state__(t, q, dim=1)
             total_reward = torch.zeros(batch_size)
 
             # Select an action
             action = self.act(state, eps)
             # Take a step in the environment
-            t_p, S_p, X_p, q_p, reward, isMO, buySellMO = self.env.step(t, S, X, q, action)
+            t_p, S_p, X_p, q_p, reward, done, isMO, buySellMO = self.env.step(t, S, X, q, action)
             # Store the experience in the replay buffer and perform a learning step
-            next_state = self.__stack_state__(t_p, S_p, X_p, q_p, dim=1)
-            self.step(state, action, reward, next_state)
+            next_state = self.__stack_state__(t_p, q_p, dim=1)
+            self.step(state, action, reward, next_state, done)
 
             # # Update the state and score
             # state = next_state
@@ -315,6 +336,7 @@ class DDQNAgent:
             # total_reward += reward
 
             if i != 0 and i % n_plot == 0:
+            # if i != 0 and len(self.replay_buffer) >= self.replay_buffer.capacity * 0.5 and i % n_plot == 0:
                 print(f"Replay Buffer Size: {len(self.replay_buffer)}")
                 for param_group in self.optimizer.param_groups:
                     print(f"Learning Rate: {param_group['lr']}")
@@ -342,14 +364,14 @@ class DDQNAgent:
         fig, axs = plt.subplots(1, 3, figsize=(8, 6), sharex=False)
 
         # Left subplot: Loss
-        axs[0].plot(self.losses, color='tab:blue')
+        axs[0].plot([x * self.update_every for x in range(len(self.losses))], self.losses, color='tab:blue')
         axs[0].set_ylabel("Loss")
         axs[0].set_title("Training Loss over Time")
         axs[0].set_yscale("symlog")
         axs[0].grid(True)
 
         # Middle subplot: Learning Rate
-        axs[1].plot(self.lrs, color='tab:orange')
+        axs[1].plot([x * self.update_every for x in range(len(self.lrs))], self.lrs, color='tab:orange')
         axs[1].set_xlabel("Training Steps")
         axs[1].set_ylabel("Learning Rate")
         axs[1].set_title("Learning Rate over Time")
@@ -367,8 +389,8 @@ class DDQNAgent:
         plt.show()
 
         # Plot the policy heatmap and simulation results
-        print(f"Epsilon: {eps}")
-        self.loss_plots()
+        # print(f"Epsilon: {eps}")
+        # self.loss_plots()
         self.run_strategy(10_000, name=f"Final_Episode")
         self.plot_policy(name=f"Final_Episode")
     
@@ -421,6 +443,7 @@ class DDQNAgent:
         X = torch.zeros((nsims, N + 1))
         q = torch.zeros((nsims, N + 1))
         r = torch.zeros((nsims, N))
+        d = torch.zeros((nsims, N), dtype=torch.bool)
 
         # Initial conditions
         S[:, 0] = self.env.S_0
@@ -433,14 +456,15 @@ class DDQNAgent:
             t_now = t * self.env.dt * ones
 
             # Stack state [t, S, X, q]
-            state = self.__stack_state__(t_now, S[:, t], X[:, t], q[:, t], dim=1)
+            state = self.__stack_state__(t_now, q[:, t], dim=1)
 
             with torch.no_grad():
                 actions = torch.argmax(self.qnetwork_main(state), dim=1)
-                action_real = self.action_spaces[actions]
+                # action_real = self.action_spaces[actions]
+                action_real = self.env.to_one_hot(actions, self.action_size) # Convert action indices to one-hot encoding
 
             # Step the environment forward
-            t_p, S[:, t + 1], X[:, t + 1], q[:, t + 1], r[:, t], _, _ = self.env.step(
+            t_p, S[:, t + 1], X[:, t + 1], q[:, t + 1], r[:, t], d[:, t], _, _ = self.env.step(
                 t_now, S[:, t], X[:, t], q[:, t], action_real
             )
 
@@ -449,6 +473,7 @@ class DDQNAgent:
         X = X.numpy()
         q = q.numpy()
         r = r.numpy()
+        d = d.numpy()
 
         t = self.env.dt * np.arange(N + 1)
 
@@ -490,6 +515,10 @@ class DDQNAgent:
         ax5 = plt.subplot(3, 2, 5)
         wealth = X[:, :-1] + q[:, :-1] * S[:, :-1]  # shape (nsims, N)
         plot_stat(ax5, wealth, "Wealth Over Time", r"Wealth = $X_t + q_t \cdot S_t$")
+
+        # Plot dones
+        ax6 = plt.subplot(3, 2, 6)
+        plot_stat(ax6, d.astype(float), "Done States", "Done (True/False)")
 
         plt.suptitle(f"Strategy Simulation Results - {name}", fontsize=16)
         plt.tight_layout()
@@ -599,12 +628,9 @@ class DDQNAgent:
         q_vals = torch.linspace(-self.env.I_max, self.env.I_max, Nq)
         t_grid, q_grid = torch.meshgrid(t_vals, q_vals, indexing='ij')
 
-        S_fixed = self.env.S_0 * torch.ones_like(t_grid).reshape(-1)
-        X_fixed = torch.zeros_like(S_fixed)
-
         t_flat = t_grid.reshape(-1)
         q_flat = q_grid.reshape(-1)
-        state_batch = self.__stack_state__(t_flat, S_fixed, X_fixed, q_flat, dim=1)
+        state_batch = self.__stack_state__(t_flat, q_flat, dim=1)
 
         with torch.no_grad():
             Q_values = self.qnetwork_main(state_batch)
@@ -630,6 +656,7 @@ class DDQNAgent:
         ax.set_xlabel("Time")
         ax.set_ylabel("Inventory")
         ax.axhline(0, linestyle='--', color='k')
+        ax.set_yticks(np.arange(-self.env.I_max, self.env.I_max + 1, 2))
         plt.tight_layout()
         plt.show()
     
@@ -655,6 +682,9 @@ class DDQNAgent:
         axes[1, 0].hist(t, bins=30, color='lightgreen', edgecolor='black')
         axes[1, 0].set_title("Time Distribution")
 
+        # If actions are one-hot encoded, convert to indices for scatter plot
+        if a.ndim > 1: # (batch_size, action_size)
+            a = np.argmax(a, axis=1)
         axes[1, 1].scatter(q, a, alpha=0.5, c=r, cmap='coolwarm', s=10)
         axes[1, 1].set_xlabel("Inventory")
         axes[1, 1].set_ylabel("Action")
