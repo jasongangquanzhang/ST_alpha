@@ -76,6 +76,7 @@ class ST_alpha_DDQN:
         n_layers=6,
         lr=1e-3,
         sched_step_size=100,
+        sched_gamma=0.99,
         tau=0.01,
         name="",
     ):
@@ -86,6 +87,7 @@ class ST_alpha_DDQN:
         self.n_layers = n_layers
         self.name = name
         self.sched_step_size = sched_step_size
+        self.sched_gamma = sched_gamma
         self.lr = lr
         self.Nq = env.Nq
 
@@ -241,8 +243,8 @@ class ST_alpha_DDQN:
         if len(self.epsilon) == 0:
             self.count = 0
 
-        # for i in tqdm(range(n_iter)):
-        for i in range(n_iter):
+        for i in tqdm(range(n_iter)):
+        # for i in range(n_iter):
 
             epsilon = np.maximum(C / (D + self.count), 0.02)
             self.epsilon.append(epsilon)
@@ -255,7 +257,7 @@ class ST_alpha_DDQN:
             )
 
             if np.mod(i + 1, n_plot) == 0:
-
+                print(f"Iteration {i}, epsilon: {epsilon}")
                 self.loss_plots()
                 self.run_strategy(
                     1_000, name=datetime.now().strftime("%H_%M_%S")

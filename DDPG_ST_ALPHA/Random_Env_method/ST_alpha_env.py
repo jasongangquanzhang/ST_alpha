@@ -188,12 +188,13 @@ class ST_alpha_env:
         # reward = (X_p - X) + (q_p - q) * liquidation_price
         # reward = (X_p - X) + (q_p - q) * S_p
         # reward = (X_p - X) + q_p * (S_p - 0.5 * self.Delta - self.varphi * q_p) - q * (S - 0.5 * self.Delta - self.varphi * q)
-        discount = self.gamma ** (self.Ndt - t.float())
+        # discount = self.gamma ** (self.Ndt - t.float())
         reward = (
             (isfilled_p + isfilled_m) * 0.5 * self.Delta
             + q * (S_p - S)
             - self.phi * (q**2) * self.dt
-            - discount * self.varphi * (q_p**2 - q**2)
+            - self.varphi * (q_p**2 - q**2)
+            # - discount * self.varphi * (q_p**2 - q**2)
         )
 
         return t_p, S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO
