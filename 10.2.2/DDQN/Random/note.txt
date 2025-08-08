@@ -3,6 +3,8 @@
 3000 iters => 0.9983
 5000 iters => 0.999
 
+Parameter tuning timeline:
+
 3rd August:
 - tried using different liquidation for terminal state
 - increasing n_iter (respectively eps_decay 0.9995, eps_end 0.05)
@@ -29,5 +31,8 @@
 - return gamma back to 1 because we don't have gamma in episodic setting, and try with varphi = 5e-4
 
 7th August:
-- change the qnetwork to only learn on iterations where the replay buffer is at least 10 times the sample size
 - try with n_iter = 5000, eps_decay = 0.999, batch_size = 512
+- try with sample_size = 6000
+- change the qnetwork to only learn on iterations where the replay buffer is at least 10 times the sample size
+- looped through different varphi values (7e-4, 6e-4, 5e-4) and picked the best one (7e-4)
+- settle 10.2.2 DDQN with this
