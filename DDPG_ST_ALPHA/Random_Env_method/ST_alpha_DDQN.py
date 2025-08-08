@@ -79,6 +79,7 @@ class ST_alpha_DDQN:
         lr=1e-3,
         sched_step_size=100,
         tau=0.01,
+        terminal_frac=0.2,
         exploration_rate=0.02,
         name="",
     ):
@@ -91,6 +92,7 @@ class ST_alpha_DDQN:
         self.sched_step_size = sched_step_size
         self.lr = lr
         self.Nq = env.Nq
+        self.terminal_frac = terminal_frac  # fraction of terminal samples in mini-batch
         self.exploration_rate = exploration_rate
 
         self.__initialize_NNs__()
@@ -162,7 +164,7 @@ class ST_alpha_DDQN:
             axis=-1,
         ).float()
 
-    def __grab_mini_batch__(self, mini_batch_size):
+    def __grab_mini_batch__(self, mini_batch_size, terminal_frac=0.2):
         """
         Grab a mini-batch of data from the environment.
         Args:
@@ -172,18 +174,28 @@ class ST_alpha_DDQN:
         """
         # t is relative time from end
         t = torch.randint(0, self.env.Ndt, (mini_batch_size,))
-        # t[-int(mini_batch_size*0.05):] = self.env.N
 
+        # number of terminal samples
+        k = int(terminal_frac * mini_batch_size)
+
+        if k > 0:
+            half_k = k // 2
+            # force some samples to Ndt-1
+            t[-half_k:] = self.env.Ndt - 1
+            # force some samples to Ndt-2
+            t[-k:-half_k] = self.env.Ndt - 2
         S, q, X, alpha = self.env.Randomize_Start(t, mini_batch_size)
         # TODO: plot these to check these
         return t, S, q, X, alpha
+
+
 
     def update_Q(
         self, n_iter=10, mini_batch_size=256, exploration_rate=0.02
     ):  # TODO: make it time update not random
         for i in range(n_iter):
 
-            t, S, q, X, alpha = self.__grab_mini_batch__(mini_batch_size) # should oversample t=9 but with decay
+            t, S, q, X, alpha = self.__grab_mini_batch__(mini_batch_size, terminal_frac=self.terminal_frac)  # should oversample t=9 but with decay
 
             self.Q_main["optimizer"].zero_grad()
 
@@ -204,7 +216,7 @@ class ST_alpha_DDQN:
             Q_value = Q.gather(1, actions.unsqueeze(1)).squeeze(1)
 
             # Step in environment to get next state and reward
-            t_p, S_p, X_p, alpha_p, q_p, r, isMO, buySellMO = self.env.step(
+            t_p, S_p, X_p, alpha_p, q_p, r, isMO, buySellMO, done = self.env.step(
                 t, S, X, alpha, q, actions
             )
             # New state
@@ -213,10 +225,8 @@ class ST_alpha_DDQN:
             # Next greedy action for Double DQN
             next_greedy_actions = Q_p.argmax(dim=1, keepdim=True)
             # Target value using target net
-            target_q_values = (
-                self.Q_target["net"](state_p).gather(1, next_greedy_actions).squeeze(1)
-            ) * (t_p != self.env.Ndt)  #TODO: modify this to indicator one last step
-
+            done_mask = (1 - done.float())   # 1 if not terminal, 0 if terminal
+            target_q_values = Q_p.gather(1, next_greedy_actions).squeeze(1) * done_mask
             # Compute target
             target = r + self.env.gamma * target_q_values
             target = target.detach()
@@ -346,44 +356,46 @@ class ST_alpha_DDQN:
         )
 
         ones = torch.ones(nsims)
+        with torch.no_grad():
+            for step in range(N):
 
-        for step in range(N):
+                state = self.__stack_state__(
+                    t=time[:, step],
+                    S=S[:, step],
+                    q=q[:, step],
+                    X=X[:, step],
+                    alpha=alpha[:, step],
+                )
+                
+                Q = self.Q_main["net"](state)
+                action[:, step] = Q.argmax(dim=1)
+                (
+                    time[:, step + 1],
+                    S[:, step + 1],
+                    X[:, step + 1],
+                    alpha[:, step + 1],
+                    q[:, step + 1],
+                    r[:, step],
+                    isMO[:, step],
+                    buySellMO[:, step],
+                    done
+                ) = self.env.step(
+                    time[:, step],
+                    S[:, step],
+                    X[:, step],
+                    alpha[:, step],
+                    q[:, step],
+                    action[:, step],
+                )
 
-            state = self.__stack_state__(
-                t=time[:, step],
-                S=S[:, step],
-                q=q[:, step],
-                X=X[:, step],
-                alpha=alpha[:, step],
-            )
-            Q = self.Q_main["net"](state)
-            action[:, step] = Q.argmax(dim=1)
-            (
-                time[:, step + 1],
-                S[:, step + 1],
-                X[:, step + 1],
-                alpha[:, step + 1],
-                q[:, step + 1],
-                r[:, step],
-                isMO[:, step],
-                buySellMO[:, step],
-            ) = self.env.step(
-                time[:, step],
-                S[:, step],
-                X[:, step],
-                alpha[:, step],
-                q[:, step],
-                action[:, step],
-            )
-
-        # Clear position at the end of the simulation
-        X[:, X.shape[1] - 1] += np.multiply(
-            S[:, S.shape[1] - 1]
-            + (0.5 * self.env.Delta) * np.sign(q[:, q.shape[1] - 1])
-            + self.env.varphi * q[:, q.shape[1] - 1],
-            q[:, q.shape[1] - 1],
-        )
-        q[:, q.shape[1] - 1] = 0
+        # # Clear position at the end of the simulation
+        # X[:, X.shape[1] - 1] += np.multiply(
+        #     S[:, S.shape[1] - 1]
+        #     + (0.5 * self.env.Delta) * np.sign(q[:, q.shape[1] - 1])
+        #     + self.env.varphi * q[:, q.shape[1] - 1],
+        #     q[:, q.shape[1] - 1],
+        # )
+        # q[:, q.shape[1] - 1] = 0
 
         # extract everything
         time = time.detach().numpy()
@@ -432,7 +444,7 @@ class ST_alpha_DDQN:
         plot(t, X + S * q, 5, r"$Wealth$")
 
         plt.subplot(2, 3, 6)
-        plt.hist(X[:, -1], bins=51)
+        plt.hist(X[:, -1]+S[:, -1]*q[:, -1], bins=51)
         plt.title("Terminal Wealth")
         plt.xlabel("Wealth")
         plt.ylabel("Frequency")
