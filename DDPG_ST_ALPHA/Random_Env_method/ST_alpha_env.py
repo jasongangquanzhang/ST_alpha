@@ -380,7 +380,7 @@ class ST_alpha_env_Telescoping:
         # Price state
         S_p = (
             S
-            + (self.nu + 10 * alpha) * self.dt
+            + (self.nu + alpha) * self.dt
             + self.sigma * torch.sqrt(torch.tensor(self.dt)) * torch.randn(Nsims)
         )
 

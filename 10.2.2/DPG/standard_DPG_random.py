@@ -19,6 +19,87 @@ import copy
 import pdb
 from datetime import datetime
 
+class ConvANN(nn.Module):
+    def __init__(
+        self,
+        n_in,
+        n_out,
+        nNodes,
+        nLayers,
+        kernel_size=3,
+        activation="relu",
+        out_activation=None,
+        temperature=1,
+        scale=1,
+    ):
+        super(ConvANN, self).__init__()
+
+        # --- input projection (1D conv) ---
+        # input is reshaped to (batch, 1, n_in), then projected to nNodes channels
+        self.prop_in_to_h = nn.Conv1d(in_channels=1, out_channels=nNodes,
+                                      kernel_size=kernel_size, padding=kernel_size // 2)
+
+        # --- hidden conv layers ---
+        self.prop_h_to_h = nn.ModuleList(
+            [nn.Conv1d(in_channels=nNodes, out_channels=nNodes,
+                       kernel_size=kernel_size, padding=kernel_size // 2)
+             for _ in range(nLayers - 1)]
+        )
+
+        # --- normalization layers ---
+        self.norms = nn.ModuleList([nn.BatchNorm1d(nNodes) for _ in range(nLayers - 1)])
+
+        # --- output projection ---
+        # flatten then project to n_out
+        self.prop_h_to_out = nn.Linear(nNodes * n_in, n_out)
+
+        # activation function
+        if activation == "silu":
+            self.g = nn.SiLU()
+        elif activation == "relu":
+            self.g = nn.ReLU()
+        elif activation == "gelu":
+            self.g = nn.GELU()
+        elif activation == "leakyrelu":
+            self.g = nn.LeakyReLU(0.01)
+        else:
+            raise ValueError(f"Unsupported activation: {activation}")
+
+        self.out_activation = out_activation
+        self.temperature = temperature
+        self.scale = scale
+
+    def forward(self, x):
+        """
+        x: shape (batch, n_in)
+        """
+        # reshape to (batch, channels=1, length=n_in)
+        x = x.unsqueeze(1)
+
+        # input conv
+        h = self.g(self.prop_in_to_h(x))
+
+        # hidden conv blocks
+        for i, layer in enumerate(self.prop_h_to_h):
+            h = self.g(self.norms[i](layer(h)))
+
+        # flatten conv output
+        h = h.flatten(start_dim=1)  # (batch, nNodes * n_in)
+
+        # output layer
+        y = self.prop_h_to_out(h)
+
+        # output activation
+        if self.out_activation == "tanh":
+            y = torch.tanh(y)
+        elif self.out_activation == "sigmoid":
+            y = torch.sigmoid(y)
+        elif self.out_activation == "softmax":
+            y = torch.softmax(y / self.temperature, dim=-1)
+
+        return y
+
+
 
 class ANN(nn.Module):
     def __init__(
@@ -92,6 +173,7 @@ class DPGAgent:
         sched_step_size=100,
         tau=0.01,
         exploration_p=0.02,
+        network_type="ANN",
         name="",
     ):
 
@@ -105,6 +187,7 @@ class DPGAgent:
         self.lr_p = lr_p
         self.Nq = env.Nq
         self.exploration_p = exploration_p
+        self.network_type = network_type
 
         self.__initialize_NNs__()
 
@@ -129,16 +212,39 @@ class DPGAgent:
         #
         # features = t/T,S,  q
         #
-        self.pi_main = {
-            "net": ANN(
-                n_in=2,
-                n_out=4,
-                nNodes=self.n_nodes,
-                nLayers=self.n_layers,
-                out_activation="softmax",
-                scale=self.Nq,
-            )
-        }
+        if self.network_type == "ConvANN":
+            self.pi_main = {
+                "net": ConvANN(
+                    n_in=2,
+                    n_out=4,
+                    nNodes=self.n_nodes,
+                    nLayers=self.n_layers,
+                    out_activation="softmax",
+                    scale=self.Nq,
+                )
+            }
+            self.Q_main = {
+                "net": ConvANN(
+                    n_in=6,
+                    n_out=1,
+                    nNodes=self.n_nodes,
+                    nLayers=self.n_layers,
+                )
+            }
+        else:
+            self.pi_main = {
+                "net": ANN(
+                    n_in=2,
+                    n_out=4,
+                    nNodes=self.n_nodes,
+                    nLayers=self.n_layers,
+                    out_activation="softmax",
+                    scale=self.Nq,
+                )
+            }
+            self.Q_main = {
+                "net": ANN(n_in=6, n_out=1, nNodes=self.n_nodes, nLayers=self.n_layers)
+            }
 
         self.pi_main["optimizer"], self.pi_main["scheduler"] = self.__get_optim_sched__(
             self.pi_main, lr=self.lr_p
@@ -150,9 +256,7 @@ class DPGAgent:
         #
         # features = t,S, q, action
         #
-        self.Q_main = {
-            "net": ANN(n_in=6, n_out=1, nNodes=self.n_nodes, nLayers=self.n_layers)
-        }
+        
 
         self.Q_main["optimizer"], self.Q_main["scheduler"] = self.__get_optim_sched__(
             self.Q_main, lr=self.lr_q
@@ -193,138 +297,137 @@ class DPGAgent:
             ),
             axis=-1,
         ).float()
-
-    def __grab_mini_batch__(self, mini_batch_size):
+    
+    def __grab_mini_batch__(self, mini_batch_size, terminal_frac=0.2):
         """
-        Grab a mini-batch of data from the environment.
+        Grab a minibatch of states.
+        Oversample terminal steps with probability = terminal_frac.
+        
         Args:
-            mini_batch_size (int): Size of the mini-batch.
+            mini_batch_size (int): batch size
+            terminal_frac (float): fraction of samples to force at t = Ndt-1
         Returns:
-            tuple: A tuple containing the time, state, cash, alpha, and inventory tensors.
+            (t, S, q, X)
         """
-        # t is randomly sampled from 0 to Ndt
+        # sample uniformly from [0, Ndt)
         t = torch.randint(0, self.env.Ndt, (mini_batch_size,))
-        # t[-int(mini_batch_size*0.05):] = self.env.N
-        # NOTE: in a brownian motion, the standard deviation is proportional to the square root of time
-        S, q, X = self.env.Randomize_Start(t, mini_batch_size)
 
+        # number of terminal samples
+        k = int(terminal_frac * mini_batch_size)
+
+        if k > 0:
+            half_k = k // 2
+            # force some samples to Ndt-1
+            t[-half_k:] = self.env.Ndt - 1
+            # force some samples to Ndt-2
+            t[-k:-half_k] = self.env.Ndt - 2
+
+        # sample states
+        S, q, X = self.env.Randomize_Start(t, mini_batch_size)
         return t, S, q, X
 
-    def update_Q(self, n_iter=1, mini_batch_size=256, epsilon=0.02):
+
+    def update_Q(self, n_iter=1, mini_batch_size=256, terminal_frac=0.2):
 
         for i in range(n_iter):
 
-            t, S, q, X = self.__grab_mini_batch__(mini_batch_size)
+            t, S, q, X = self.__grab_mini_batch__(mini_batch_size, terminal_frac=terminal_frac)
 
             self.Q_main["optimizer"].zero_grad()
 
             # concatenate states
             state = self.__stack_state__(t=t, S=S, q=q, X=X)
 
-            # compute the action
-
-            # if np.random.rand() < epsilon:
-            #     # Random action (uniform exploration)
-            #     action = torch.randint(0, 4, (mini_batch_size,)).unsqueeze(1)
-            # else:
-            #     # Sample from the policy's softmax output
-
-            #     action = torch.multinomial(
-            #         self.pi_main["net"](state).detach(), num_samples=1
-            #     )
+            # sample action from current policy
             action = torch.multinomial(
                 self.pi_main["net"](state).detach(), num_samples=1
             )
             action_onehot = torch.nn.functional.one_hot(
                 action.squeeze(), num_classes=4
             ).float()
-            Q = self.Q_main["net"](torch.cat((state, action_onehot), axis=1))
-            # # compute the value of the action I_p given state X
-            # Q = self.Q_main["net"](torch.cat((state, action), axis=1))
 
-            # step in the environment get the next state and reward
-            t_p, S_p, X_p, q_p, r, isMO, buySellMO = self.env.step(
+            Q = self.Q_main["net"](torch.cat((state, action_onehot), axis=1))
+
+            # take environment step
+            t_p, S_p, X_p, q_p, r, isMO, buySellMO, done = self.env.step(
                 t=t, S=S, X=X, q=q, action=action.squeeze(1)
             )
-            # compute the Q(S', a*)
-            # concatenate new state
+
+            # build next state
             state_p = self.__stack_state__(t=t_p, S=S_p, q=q_p, X=X_p)
 
-            # optimal policy at t+1 get the next action action_p
-            # if np.random.rand() < epsilon:
-            #     # Random action (uniform exploration)
-            #     action_p = torch.randint(0, 4, (mini_batch_size,)).unsqueeze(1)
-            #     # print("RANDOM ACTION:", action_p)
-            # else:
-            #     # Sample from the policy's softmax output
-            #     action_p = torch.multinomial(
-            #         self.pi_main["net"](state_p).detach(), num_samples=1
-            #     )
-            #     # print("POLICY ACTION:", action_p)
+            # next action
             action_p = torch.multinomial(
                 self.pi_main["net"](state_p).detach(), num_samples=1
             )
-            # compute the target for Q
             action_p_onehot = torch.nn.functional.one_hot(
                 action_p.squeeze(), num_classes=4
             ).float()
 
             with torch.no_grad():
-                q_target = self.Q_target["net"](
+                q_next = self.Q_target["net"](
                     torch.cat((state_p, action_p_onehot), axis=1)
                 )
 
-            target = r.reshape(-1, 1) + self.env.gamma * q_target
+            # if terminal → no bootstrap
+            done_mask = done.float().reshape(-1, 1)
+            target = r.reshape(-1, 1) + (1 - done_mask) * self.env.gamma * q_next
 
             loss = torch.mean((target.detach() - Q) ** 2)
 
-            # compute the gradients
+            # gradient step
             loss.backward()
-
-            # perform step using those gradients
             self.Q_main["optimizer"].step()
             self.Q_main["scheduler"].step()
 
             self.Q_loss.append(loss.item())
 
+            # soft update
             self.soft_update(self.Q_main["net"], self.Q_target["net"])
 
-    def update_pi(
-        self,
-        n_iter=1,
-        mini_batch_size=256,
-        exploration_p=0.02
-    ):
-        
+    def update_pi(self, n_iter=1, mini_batch_size=256, terminal_frac=0.2, exploration_p=0.02):
+
         for i in range(n_iter):
-            exploration_p = max(exploration_p * (0.99 ** (i/100)), 0.01)
-            t, S, q, X = self.__grab_mini_batch__(mini_batch_size)
+            exploration_p = max(exploration_p * (0.99 ** (i / 100)), 0.01)
+
+            # grab random states
+            t, S, q, X = self.__grab_mini_batch__(mini_batch_size, terminal_frac=terminal_frac)
 
             self.pi_main["optimizer"].zero_grad()
 
             # concatenate states
             state = self.__stack_state__(t=t, S=S, q=q, X=X)
+
+            # ---- build "done" mask ----
+            # terminal if t == Ndt (i.e. last step)
+            done = (t >= self.env.Ndt).float().reshape(-1, 1)
+
+            # policy outputs
             probs = self.pi_main["net"](state)
-            action = torch.multinomial(
-                probs, num_samples=1
-            )  # Sample action from the policy distribution
-            log_probs = torch.log(probs + 1e-8)  # prevent log(0)
-            selected_log_probs = log_probs.gather(
-                1, action
-            )  # NOTE: log prob so that it got updated
+
+            # sample action
+            action = torch.multinomial(probs, num_samples=1)
+            log_probs = torch.log(probs + 1e-8)
+            selected_log_probs = log_probs.gather(1, action)
+
+            # one-hot encoding
             action_onehot = torch.nn.functional.one_hot(
                 action.squeeze(), num_classes=4
             ).float()
+
+            # Q-value for (s, a)
             Q = self.Q_main["net"](torch.cat((state, action_onehot), axis=1))
+
             self.Q_value.append(Q.detach().cpu().numpy())
-            # Q = self.Q_main["net"](torch.cat((state, action), axis=1))
-            # entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1).mean()
-            entropy = -torch.sum(probs * torch.log(probs), dim=1).mean()
+
+            # entropy bonus
+            entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1).mean()
+
+            # ---- mask out terminal states ----
             loss = (
-                -torch.mean(selected_log_probs * Q.detach())
+                -torch.mean((1 - done) * selected_log_probs * Q.detach())
                 - exploration_p * entropy
             )
-            # loss = -torch.mean(selected_log_probs * Q.detach())
 
             loss.backward()
             self.pi_main["optimizer"].step()
@@ -347,8 +450,8 @@ class DPGAgent:
             nsims=1_000, name=datetime.now().strftime("%H_%M_%S")
         )  # intital evaluation
 
-        C = 50
-        D = 100
+        C = 2000
+        D = 4000
 
         if len(self.epsilon) == 0:
             self.count = 0
@@ -356,18 +459,22 @@ class DPGAgent:
         # for i in tqdm(range(n_iter)):
         for i in range(n_iter):
 
-            epsilon = np.maximum(C / (D + self.count), 0.02)
-            self.epsilon.append(epsilon)
+            terminal_frac = np.maximum(C / (D + self.count), 0.1)
+            # self.epsilon.append(epsilon)
+
             self.count += 1
 
             # pdb.set_trace()
 
             self.update_Q(
-                n_iter=n_iter_Q, mini_batch_size=mini_batch_size, epsilon=epsilon
+                n_iter=n_iter_Q, mini_batch_size=mini_batch_size, terminal_frac=terminal_frac
             )
 
             self.update_pi(
-                n_iter=n_iter_pi, mini_batch_size=mini_batch_size, exploration_p=self.exploration_p
+                n_iter=n_iter_pi,
+                mini_batch_size=mini_batch_size,
+                terminal_frac=terminal_frac,
+                exploration_p=self.exploration_p,
             )
 
             if np.mod(i + 1, n_plot) == 0:
@@ -437,6 +544,7 @@ class DPGAgent:
 
         if N is None:
             N = self.env.Ndt  # number of time steps
+
         time = torch.zeros((nsims, N + 1)).float()
         S = torch.zeros((nsims, N + 1)).float()
         q = torch.zeros((nsims, N + 1)).float()
@@ -447,20 +555,22 @@ class DPGAgent:
         isMO = torch.zeros((nsims, N)).float()
         buySellMO = torch.zeros((nsims, N)).float()
 
+        # --- initial state ---
         S[:, 0], q[:, 0], X[:, 0] = self.env.Zero_Start(nsims)
-        ones = torch.ones(nsims)
 
-        for step in range(N):  # t = 0->N-1
-            # concatenate states
+        for step in range(N):  # t = 0 ... N-1
+            # current state
             state = self.__stack_state__(
                 t=time[:, step], S=S[:, step], X=X[:, step], q=q[:, step]
             )
-            # compute the action
+
+            # sample action from policy
             with torch.no_grad():
                 action[:, step] = torch.multinomial(
                     self.pi_main["net"](state).detach(), num_samples=1
                 ).squeeze(1)
 
+            # environment step
             (
                 time[:, step + 1],
                 S[:, step + 1],
@@ -469,6 +579,7 @@ class DPGAgent:
                 r[:, step],
                 isMO[:, step],
                 buySellMO[:, step],
+                done,
             ) = self.env.step(
                 t=time[:, step],
                 S=S[:, step],
@@ -476,16 +587,12 @@ class DPGAgent:
                 q=q[:, step],
                 action=action[:, step],
             )
-        # Clear position at the end of the simulation
-        X[:, X.shape[1] - 1] += np.multiply(
-            S[:, S.shape[1] - 1]
-            + (0.5 * self.env.Delta) * np.sign(q[:, q.shape[1] - 1])
-            + self.env.varphi * q[:, q.shape[1] - 1],
-            q[:, q.shape[1] - 1],
-        )
-        q[:, q.shape[1] - 1] = 0
 
-        # extract everything
+            # --- stop early if all done (unlikely in trading, but for consistency) ---
+            if done.all():
+                break
+
+        # --- convert to numpy for plotting ---
         time = time.detach().numpy()
         S = S.detach().numpy()
         X = X.detach().numpy()
@@ -527,7 +634,7 @@ class DPGAgent:
         # plt.suptitle("Simulation", fontsize=14, y=1.05)
         plt.suptitle(f"Simulation - {self}  \n  {self.env}", fontsize=12, y=1.02)
         plt.subplot(2, 3, 6)
-        plt.hist(X[:, -1], bins=51)
+        plt.hist(X[:, -1]+S[:, -1]*q[:, -1], bins=51)
         plt.title("Terminal Wealth")
         plt.xlabel("Wealth")
         plt.ylabel("Frequency")

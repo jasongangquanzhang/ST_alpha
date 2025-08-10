@@ -230,9 +230,10 @@ class ST_alpha_DDQN:
             # Compute target
             target = r + self.env.gamma * target_q_values
             target = target.detach()
-
+            huber = torch.nn.SmoothL1Loss()
+            loss = huber(Q_value, target.detach()) 
             # Loss
-            loss = torch.mean((Q_value - target) ** 2)
+            # loss = torch.mean((Q_value - target) ** 2)
             loss.backward()
             self.Q_main["optimizer"].step()
             self.Q_main["scheduler"].step()
