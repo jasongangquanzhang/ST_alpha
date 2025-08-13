@@ -194,10 +194,11 @@ class ST_alpha_env:
             + q * (S_p - S)
             - self.phi * (q**2) * self.dt
             - self.varphi * (q_p**2 - q**2)
-            # - discount * self.varphi * (q_p**2 - q**2)
         )
 
-        return t_p, S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO
+        done = t_p >= self.Ndt
+
+        return t_p, S_p, X_p, alpha_p, q_p, reward, isMO, buySellMO, done
 
 
 # TODO: add experience replay buffer
