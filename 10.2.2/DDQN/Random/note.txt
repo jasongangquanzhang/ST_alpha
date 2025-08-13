@@ -1,0 +1,38 @@
+1000 iters => 0.995
+2000 iters => 0.9975
+3000 iters => 0.9983
+5000 iters => 0.999
+
+Parameter tuning timeline:
+
+3rd August:
+- tried using different liquidation for terminal state
+- increasing n_iter (respectively eps_decay 0.9995, eps_end 0.05)
+- adjust learning rates (0.3 gamma, 2500/4 step size): this doesn't work, the result are so bad, consider getting back
+
+5th August:
+- putting back to previous setting that work (sched_step_size 100/4, sched_gamma 0.99, eps_end 0.01)
+- use smaller n_iter (5000) and smaller sched_step_size (100/2)
+- prev result not bad, try with varphi = 2e-3 to enforce shrinking green area near the end
+- found a small bug (multiply liquidation penalty by dt), removed it and try varphi = 1e-3 again
+- not stable, green area mostly above 0, trying n_nodes = 64 and n_hidden_layers = 3 (from n_nodes = 16 and n_hidden_layers = 6)
+- stable, but no green area, try with phi = 0 and varphi = 1e-2
+- still no green area, try with varphi = 1e-3
+- green area is there, but mostly increasing near terminal, so try with exact setting as working one (sched_step_size 50/1, update_every=1)
+- try to run overnight for a combination of n_nodes and n_hidden_layers
+
+6th August:
+- see result from before, apparently (16, 2), (32, 4) and (64, 5) and (128, 4) seem like a good setting
+- try (64, 5) with varphi = 1e-4
+- try (64, 5) with varphi = 1e-3
+- try (16, 6) with varphi = 1e-3, n_iter = 3000, eps_decay = 0.9985
+- try batch_size = 500 and minimum replay buffer size = 0.5 capacity
+- roll back needing 90% of capacity before starting training, and reduce gamma (discount factor for reward) from 0.999 to 0.99
+- return gamma back to 1 because we don't have gamma in episodic setting, and try with varphi = 5e-4
+
+7th August:
+- try with n_iter = 5000, eps_decay = 0.999, batch_size = 512
+- try with sample_size = 6000
+- change the qnetwork to only learn on iterations where the replay buffer is at least 10 times the sample size
+- looped through different varphi values (7e-4, 6e-4, 5e-4) and picked the best one (7e-4)
+- settle 10.2.2 DDQN with this
