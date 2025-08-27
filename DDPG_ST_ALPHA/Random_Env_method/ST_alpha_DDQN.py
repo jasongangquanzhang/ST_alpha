@@ -165,8 +165,8 @@ class ST_alpha_DDQN:
         S, q, X, alpha = self.env.Randomize_Start(t, mini_batch_size)
         return t, S, q, X, alpha
 
-    def update_Q(self, n_iter=10, mini_batch_size=256, epsilon=0.02):# TODO: make it time update not random
-        for i in range(n_iter):
+    def update_Q(self, n_iter_Q=10, mini_batch_size=256, epsilon=0.02):# TODO: make it time update not random
+        for i in range(n_iter_Q):
 
             t, S, q, X, alpha = self.__grab_mini_batch__(mini_batch_size)
 
@@ -249,7 +249,7 @@ class ST_alpha_DDQN:
             # pdb.set_trace()
 
             self.update_Q(
-                n_iter=n_iter_Q, mini_batch_size=mini_batch_size, epsilon=epsilon
+                n_iter_Q=n_iter_Q, mini_batch_size=mini_batch_size, epsilon=epsilon
             )
 
             if np.mod(i + 1, n_plot) == 0:
