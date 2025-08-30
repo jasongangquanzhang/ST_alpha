@@ -101,11 +101,14 @@ class DDQNAgent:
         self.tau = tau
 
     def __initialize_NNs__(self):
+        """
+        Initializes the main and target Q-networks.
 
-        # Q - function approximation
-        #
-        # features =t, alpha, q
-        #
+        Creates the main Q-network (DDQN) with input size 3 (t, alpha, q),
+        output size 4 (actions), and hidden structure defined by
+        n_nodes and n_layers. Also sets up the optimizer and scheduler,
+        and makes a copy of the main network as the target network.
+        """
         self.Q_main = {
             "net": DDQN(n_in=3, n_out=4, nNodes=self.n_nodes, nLayers=self.n_layers)
         }
@@ -117,7 +120,15 @@ class DDQNAgent:
         self.Q_target = copy.deepcopy(self.Q_main)
 
     def __get_optim_sched__(self, net):
+        """
+        Sets up the optimizer and learning rate scheduler for the given network.
 
+        Args:
+            net (dict): The network dictionary containing the 'net' key.
+
+        Returns:
+            tuple: A tuple containing the optimizer and scheduler.
+        """
         optimizer = optim.AdamW(net["net"].parameters(), lr=self.lr, weight_decay=self.opt_weight_decay)
 
         scheduler = optim.lr_scheduler.StepLR(
@@ -128,7 +139,7 @@ class DDQNAgent:
 
     def __stack_state__(self, t, alpha, q):
         """
-        Stack the state variables into a single tensor.
+        Stack the state variables into a single tensor after applying normalization.
 
         Args:
             t (torch.Tensor): Time variable.
@@ -150,6 +161,16 @@ class DDQNAgent:
         ).float()
 
     def __grab_mini_batch__(self, mini_batch_size, terminal_frac=0.2):
+        """
+        Grabs a mini-batch of experiences from the environment.
+
+        Args:
+            mini_batch_size (int): The size of the mini-batch to sample.
+            terminal_frac (float): The fraction of terminal states to include.
+
+        Returns:
+            tuple: A tuple containing the sampled time steps, states, actions, and rewards.
+        """
         t = torch.randint(0, self.env.Ndt, (mini_batch_size,))
         k = int(terminal_frac * mini_batch_size)
         if k > 0:
@@ -159,7 +180,15 @@ class DDQNAgent:
         S, q, X, alpha = self.env.Randomize_Start(t, mini_batch_size)
         return t, S, q, X, alpha
 
-    def update_Q(self, n_iter_Q=10, mini_batch_size=256, epsilon=0.02):# TODO: make it time update not random
+    def update_Q(self, n_iter_Q=10, mini_batch_size=256, epsilon=0.02):
+        """
+        Updates the Q-network by performing a number of training iterations.
+
+        Args:
+            n_iter_Q (int): The number of iterations to perform per epsilon value.
+            mini_batch_size (int): The size of the mini-batch to sample.
+            epsilon (float): The exploration rate for epsilon-greedy action selection.
+        """
         for i in range(n_iter_Q):
 
             t, S, q, X, alpha = self.__grab_mini_batch__(mini_batch_size)
@@ -218,20 +247,31 @@ class DDQNAgent:
             self.soft_update(self.Q_main["net"], self.Q_target["net"])
 
     def soft_update(self, main, target):
-
+        """
+        Soft updates the target network parameters towards the main network parameters using Polyak averaging.
+        """
         for param, target_param in zip(main.parameters(), target.parameters()):
             target_param.data.copy_(
                 self.tau * param.data + (1.0 - self.tau) * target_param.data
             )
 
     def train(self, n_iter=1_000, n_iter_Q=10, mini_batch_size=256, n_plot=100):
+        """
+        Trains the DDQN agent by performing a number of iterations, while plotting the loss,
+        simulating a trading environment with current policy, and showing the policy itself.
 
+        Args:
+            n_iter (int): The number of iterations to perform.
+            n_iter_Q (int): The number of iterations to perform per epsilon value.
+            mini_batch_size (int): The size of the mini-batch to sample.
+            n_plot (int): The number of iterations between each plot.
+        """
         self.run_strategy(
             nsims=1_000, name=datetime.now().strftime("%H_%M_%S")
         )  # intital evaluation
 
-        C = 50
-        D = 100
+        C = 500
+        D = 1000
 
         if len(self.epsilon) == 0:
             self.count = 0
